@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 import os
+from pathlib import Path
 
 app = Flask(__name__)
 
@@ -18,7 +19,7 @@ class User(db.Model):
     phone = db.Column(db.String(20), nullable=False)
     time = db.Column(db.String(30), nullable=False)
 
-# 🛠 Создаём таблицы (один раз при запуске)
+# 🛠 Создаём таблицы
 with app.app_context():
     db.create_all()
 
@@ -29,9 +30,19 @@ def register():
     phone = data.get('phone')
     time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
+    # Сохраняем в БД
     user = User(name=name, phone=phone, time=time)
     db.session.add(user)
     db.session.commit()
+
+    # 🔽 Сохраняем в txt на рабочем столе (если локально)
+    try:
+        desktop = Path.home() / "Desktop"
+        log_file = desktop / "sarbaz_registrations.txt"
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(f"{time} | {name} | {phone}\n")
+    except Exception as e:
+        print("❗ Не удалось записать в файл:", e)
 
     print(f"[{time}] {name} - {phone}")
     return jsonify({'status': 'ok'}), 200
