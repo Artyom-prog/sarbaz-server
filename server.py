@@ -19,9 +19,12 @@ class User(db.Model):
     phone = db.Column(db.String(20), nullable=False)
     time = db.Column(db.String(30), nullable=False)
 
-# 🛠 Создаём таблицы
-with app.app_context():
-    db.create_all()
+# ✅ Ручной маршрут для создания таблиц в Render
+@app.route('/init_db')
+def init_db():
+    with app.app_context():
+        db.create_all()
+    return '✅ Таблицы успешно созданы'
 
 @app.route('/register', methods=['POST'])
 def register():
