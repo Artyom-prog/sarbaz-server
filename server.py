@@ -17,10 +17,10 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
     rank = db.Column(db.String(100), nullable=False)
-    phoneNumber = db.Column(db.String(20), nullable=False, unique=True)
+    phone_number = db.Column(db.String(20), nullable=False, unique=True)
     password = db.Column(db.String(255), nullable=False)  # Хешированный пароль
     time = db.Column(db.String(30), nullable=False)
-    isPremium = db.Column(db.Boolean, default=False)
+    is_premium = db.Column(db.Boolean, default=False)
 
 # ✅ Создание таблиц (только в отладочном режиме)
 @app.route('/init_db')
@@ -40,15 +40,15 @@ def register():
 
     name = data.get('name')
     rank = data.get('rank')
-    phone = data.get('phoneNumber')
+    phone = data.get('phoneNumber')  # ⚠️ клиент всё ещё отправляет в camelCase
     password = data.get('password')
-    isPremium = data.get('isPremium', False)
+    is_premium = data.get('isPremium', False)
     time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
     if not name or not rank or not phone or not password:
         return jsonify({'error': 'Missing required fields'}), 400
 
-    existing = User.query.filter_by(phoneNumber=phone).first()
+    existing = User.query.filter_by(phone_number=phone).first()
     if existing:
         return jsonify({'error': 'User with this phone already exists'}), 409
 
@@ -57,18 +57,16 @@ def register():
     user = User(
         name=name,
         rank=rank,
-        phoneNumber=phone,
+        phone_number=phone,
         password=hashed_password,
         time=time,
-        isPremium=isPremium
+        is_premium=is_premium
     )
     db.session.add(user)
     db.session.commit()
 
     print(f"[{time}] Зарегистрирован пользователь: {phone}")
     return jsonify({'status': 'ok'}), 201
-
-# 🔐 Удалён открытый маршрут /users — небезопасно для продакшена
 
 # ▶️ Запуск
 if __name__ == '__main__':
