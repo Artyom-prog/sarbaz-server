@@ -1,8 +1,8 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
+from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 import os
-from pathlib import Path
 
 app = Flask(__name__)
 
@@ -18,17 +18,20 @@ class User(db.Model):
     name = db.Column(db.String(100), nullable=False)
     rank = db.Column(db.String(100), nullable=False)
     phoneNumber = db.Column(db.String(20), nullable=False, unique=True)
-    password = db.Column(db.String(100), nullable=False)
+    password = db.Column(db.String(255), nullable=False)  # Хешированный пароль
     time = db.Column(db.String(30), nullable=False)
-    isPremium = db.Column(db.Boolean, default=False)  # ✅ Новое поле
+    isPremium = db.Column(db.Boolean, default=False)
 
-# ✅ Ручной маршрут для создания таблиц (только во время разработки!)
+# ✅ Создание таблиц (только в отладочном режиме)
 @app.route('/init_db')
 def init_db():
+    if not app.debug:
+        return jsonify({'error': 'Forbidden'}), 403
+
     with app.app_context():
-        db.drop_all()       # ❗ Удаляет старую таблицу
-        db.create_all()     # 🔄 Создаёт заново
-    return '✅ Таблицы успешно пересозданы'
+        db.drop_all()
+        db.create_all()
+    return '✅ База данных пересоздана'
 
 # ✅ Регистрация пользователя
 @app.route('/register', methods=['POST'])
@@ -49,44 +52,24 @@ def register():
     if existing:
         return jsonify({'error': 'User with this phone already exists'}), 409
 
+    hashed_password = generate_password_hash(password)
+
     user = User(
         name=name,
         rank=rank,
         phoneNumber=phone,
-        password=password,
+        password=hashed_password,
         time=time,
         isPremium=isPremium
     )
     db.session.add(user)
     db.session.commit()
 
-    # ⬇️ Пишем в файл (если локально)
-    try:
-        desktop = Path.home() / "Desktop"
-        log_file = desktop / "sarbaz_registrations.txt"
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(f"{time} | {name} | {rank} | {phone} | Premium: {isPremium}\n")
-    except Exception as e:
-        print("❗ Не удалось записать в файл:", e)
-
-    print(f"[{time}] Зарегистрирован: {name} | {rank} | {phone} | Premium: {isPremium}")
+    print(f"[{time}] Зарегистрирован пользователь: {phone}")
     return jsonify({'status': 'ok'}), 201
 
-# 📄 Получение списка пользователей (для отладки)
-@app.route('/users', methods=['GET'])
-def get_users():
-    users = User.query.all()
-    result = [
-        {
-            'name': u.name,
-            'rank': u.rank,
-            'phone': u.phoneNumber,
-            'isPremium': u.isPremium,
-            'time': u.time
-        } for u in users
-    ]
-    return jsonify(result)
+# 🔐 Удалён открытый маршрут /users — небезопасно для продакшена
 
-# ▶️ Локальный запуск
+# ▶️ Запуск
 if __name__ == '__main__':
-    app.run()
+    app.run(debug=True)
