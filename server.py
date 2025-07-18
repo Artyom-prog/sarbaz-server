@@ -17,10 +17,10 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
     rank = db.Column(db.String(100), nullable=False)
-    phone_number = db.Column(db.String(20), nullable=False, unique=True)
+    phoneNumber = db.Column(db.String(20), nullable=False, unique=True)
     password = db.Column(db.String(255), nullable=False)  # Хешированный пароль
     time = db.Column(db.String(30), nullable=False)
-    is_premium = db.Column(db.Boolean, default=False)
+    isPremium = db.Column(db.Boolean, default=False)
 
 # ✅ Создание таблиц (только в отладочном режиме)
 @app.route('/init_db')
@@ -42,7 +42,7 @@ def register():
     rank = data.get('rank')
     phone = data.get('phoneNumber')  # ⚠️ клиент всё ещё отправляет в camelCase
     password = data.get('password')
-    is_premium = data.get('isPremium', False)
+    isPremium = data.get('isPremium', False)
     time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
     if not name or not rank or not phone or not password:
@@ -57,10 +57,10 @@ def register():
     user = User(
         name=name,
         rank=rank,
-        phone_number=phone,
+        phoneNumber=phone,
         password=hashed_password,
         time=time,
-        is_premium=is_premium
+        isPremium=isPremium
     )
     db.session.add(user)
     db.session.commit()
