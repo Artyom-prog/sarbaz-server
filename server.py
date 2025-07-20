@@ -12,11 +12,10 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
-# 🔧 Модель пользователя с snake_case
+# 🔧 Обновлённая модель пользователя (без поля rank)
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
-    rank = db.Column(db.String(100), nullable=False)
     phone_number = db.Column(db.String(20), nullable=False, unique=True)
     password = db.Column(db.String(255), nullable=False)  # Хешированный пароль
     time = db.Column(db.String(30), nullable=False)
@@ -33,19 +32,18 @@ def init_db():
         db.create_all()
     return '✅ База данных пересоздана'
 
-# ✅ Регистрация пользователя
+# ✅ Регистрация пользователя (без rank)
 @app.route('/register', methods=['POST'])
 def register():
     data = request.get_json()
 
     name = data.get('name')
-    rank = data.get('rank')
     phone_number = data.get('phone_number')
     password = data.get('password')
     is_premium = data.get('is_premium', False)
     time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-    if not name or not rank or not phone_number or not password:
+    if not name or not phone_number or not password:
         return jsonify({'error': 'Missing required fields'}), 400
 
     existing = User.query.filter_by(phone_number=phone_number).first()
@@ -56,7 +54,6 @@ def register():
 
     user = User(
         name=name,
-        rank=rank,
         phone_number=phone_number,
         password=hashed_password,
         time=time,
@@ -85,8 +82,10 @@ def reset_password():
     user.password = generate_password_hash(new_password)
     db.session.commit()
 
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Обновлён пароль для: {phone_number}")
     return jsonify({'status': 'Password updated successfully'}), 200
 
 # ▶️ Запуск
 if __name__ == '__main__':
     app.run(debug=True)
+
