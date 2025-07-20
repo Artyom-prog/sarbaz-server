@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
-from werkzeug.security import generate_password_hash
+from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 import os
 
@@ -12,7 +12,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
-# 🔧 Обновлённая модель пользователя (без поля rank)
+# 🔧 Модель пользователя (без поля rank)
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
@@ -22,7 +22,7 @@ class User(db.Model):
     is_premium = db.Column(db.Boolean, default=False)
 
 # ❌ Доступ к инициализации базы закрыт
-# ✅ Для ручного пересоздания временно раскомментируй маршрут ниже
+# ✅ Для ручного пересоздания временно раскомментируй:
 """
 @app.route('/init_db')
 def init_db():
@@ -32,7 +32,7 @@ def init_db():
     return '✅ База данных пересоздана'
 """
 
-# ✅ Регистрация пользователя (без rank)
+# ✅ Регистрация пользователя
 @app.route('/register', methods=['POST'])
 def register():
     data = request.get_json()
@@ -65,7 +65,33 @@ def register():
     print(f"[{time}] Зарегистрирован пользователь: {phone_number}")
     return jsonify({'status': 'ok'}), 201
 
-# 🔁 Сброс пароля по номеру телефона
+# ✅ Вход пользователя
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    phone_number = data.get('phone_number')
+    password = data.get('password')
+
+    if not phone_number or not password:
+        return jsonify({'error': 'Missing phone number or password'}), 400
+
+    user = User.query.filter_by(phone_number=phone_number).first()
+    if not user or not check_password_hash(user.password, password):
+        return jsonify({'error': 'Invalid credentials'}), 401
+
+    user_data = {
+        'id': user.id,
+        'name': user.name,
+        'phoneNumber': user.phone_number,
+        'isPremium': user.is_premium,
+        'time': user.time
+        # 🔐 Пароль не возвращаем! Клиент может сохранить введённый самостоятельно
+    }
+
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Успешный вход: {phone_number}")
+    return jsonify({'status': 'ok', 'user': user_data}), 200
+
+# 🔁 Сброс пароля
 @app.route('/api/reset-password', methods=['POST'])
 def reset_password():
     data = request.get_json()
@@ -88,3 +114,4 @@ def reset_password():
 # ▶️ Запуск
 if __name__ == '__main__':
     app.run(debug=True)
+
