@@ -21,12 +21,9 @@ class User(db.Model):
     time = db.Column(db.String(30), nullable=False)
     is_premium = db.Column(db.Boolean, default=False)
 
-# ✅ Создание таблиц (только в отладочном режиме)
+# ✅ Пересоздание таблиц (временно без ограничения debug)
 @app.route('/init_db')
 def init_db():
-    if not app.debug:
-        return jsonify({'error': 'Forbidden'}), 403
-
     with app.app_context():
         db.drop_all()
         db.create_all()
@@ -88,4 +85,3 @@ def reset_password():
 # ▶️ Запуск
 if __name__ == '__main__':
     app.run(debug=True)
-
