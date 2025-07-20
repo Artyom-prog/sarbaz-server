@@ -21,13 +21,16 @@ class User(db.Model):
     time = db.Column(db.String(30), nullable=False)
     is_premium = db.Column(db.Boolean, default=False)
 
-# ✅ Пересоздание таблиц (временно без ограничения debug)
+# ❌ Доступ к инициализации базы закрыт
+# ✅ Для ручного пересоздания временно раскомментируй маршрут ниже
+"""
 @app.route('/init_db')
 def init_db():
     with app.app_context():
         db.drop_all()
         db.create_all()
     return '✅ База данных пересоздана'
+"""
 
 # ✅ Регистрация пользователя (без rank)
 @app.route('/register', methods=['POST'])
