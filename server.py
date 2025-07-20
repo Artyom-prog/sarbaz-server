@@ -68,7 +68,25 @@ def register():
     print(f"[{time}] Зарегистрирован пользователь: {phone_number}")
     return jsonify({'status': 'ok'}), 201
 
+# 🔁 Сброс пароля по номеру телефона
+@app.route('/api/reset-password', methods=['POST'])
+def reset_password():
+    data = request.get_json()
+    phone_number = data.get('phone_number')
+    new_password = data.get('new_password')
+
+    if not phone_number or not new_password:
+        return jsonify({'error': 'Missing phone number or new password'}), 400
+
+    user = User.query.filter_by(phone_number=phone_number).first()
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    user.password = generate_password_hash(new_password)
+    db.session.commit()
+
+    return jsonify({'status': 'Password updated successfully'}), 200
+
 # ▶️ Запуск
 if __name__ == '__main__':
     app.run(debug=True)
-
