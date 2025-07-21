@@ -1,53 +1,52 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
+import jwt
 
 app = Flask(__name__)
 
-# 🔐 Подключение к PostgreSQL через Render
+# 🔐 Конфигурация
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'supersecretkey')  # можно вынести в Render env
 
 db = SQLAlchemy(app)
 
-# 🔧 Модель пользователя (без поля rank)
+# 🔧 Модель пользователя
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
     phone_number = db.Column(db.String(20), nullable=False, unique=True)
-    password = db.Column(db.String(255), nullable=False)  # Хешированный пароль
+    password = db.Column(db.String(255), nullable=False)
     time = db.Column(db.String(30), nullable=False)
     is_premium = db.Column(db.Boolean, default=False)
 
-# ❌ Доступ к инициализации базы закрыт
-# ✅ Для ручного пересоздания временно раскомментируй:
-"""
-@app.route('/init_db')
-def init_db():
-    with app.app_context():
-        db.drop_all()
-        db.create_all()
-    return '✅ База данных пересоздана'
-"""
+# ✅ JWT генерация токена
+def generate_token(user):
+    payload = {
+        'user_id': user.id,
+        'phone_number': user.phone_number,
+        'exp': datetime.utcnow() + timedelta(days=30)
+    }
+    return jwt.encode(payload, app.config['SECRET_KEY'], algorithm='HS256')
 
 # ✅ Регистрация пользователя
-@app.route('/register', methods=['POST'])
+@app.route('/api/register', methods=['POST'])
 def register():
     data = request.get_json()
 
-    name = data.get('name')
-    phone_number = data.get('phone_number')
-    password = data.get('password')
+    name = data.get('name', '').strip()
+    phone_number = data.get('phone_number', '').strip()
+    password = data.get('password', '').strip()
     is_premium = data.get('is_premium', False)
     time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
     if not name or not phone_number or not password:
         return jsonify({'error': 'Missing required fields'}), 400
 
-    existing = User.query.filter_by(phone_number=phone_number).first()
-    if existing:
+    if User.query.filter_by(phone_number=phone_number).first():
         return jsonify({'error': 'User with this phone number already exists'}), 409
 
     hashed_password = generate_password_hash(password)
@@ -62,15 +61,23 @@ def register():
     db.session.add(user)
     db.session.commit()
 
+    token = generate_token(user)
+
     print(f"[{time}] Зарегистрирован пользователь: {phone_number}")
-    return jsonify({'status': 'ok'}), 201
+    return jsonify({'status': 'ok', 'token': token, 'user': {
+        'id': user.id,
+        'name': user.name,
+        'phoneNumber': user.phone_number,
+        'isPremium': user.is_premium,
+        'time': user.time
+    }}), 201
 
 # ✅ Вход пользователя
-@app.route('/login', methods=['POST'])
+@app.route('/api/login', methods=['POST'])
 def login():
     data = request.get_json()
-    phone_number = data.get('phone_number')
-    password = data.get('password')
+    phone_number = data.get('phone_number', '').strip()
+    password = data.get('password', '').strip()
 
     if not phone_number or not password:
         return jsonify({'error': 'Missing phone number or password'}), 400
@@ -79,24 +86,23 @@ def login():
     if not user or not check_password_hash(user.password, password):
         return jsonify({'error': 'Invalid credentials'}), 401
 
-    user_data = {
+    token = generate_token(user)
+
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Успешный вход: {phone_number}")
+    return jsonify({'status': 'ok', 'token': token, 'user': {
         'id': user.id,
         'name': user.name,
         'phoneNumber': user.phone_number,
         'isPremium': user.is_premium,
         'time': user.time
-        # 🔐 Пароль не возвращаем! Клиент может сохранить введённый самостоятельно
-    }
-
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Успешный вход: {phone_number}")
-    return jsonify({'status': 'ok', 'user': user_data}), 200
+    }}), 200
 
 # 🔁 Сброс пароля
-@app.route('/api/reset-password', methods=['POST'])
+@app.route('/api/reset_password', methods=['POST'])
 def reset_password():
     data = request.get_json()
-    phone_number = data.get('phone_number')
-    new_password = data.get('new_password')
+    phone_number = data.get('phone_number', '').strip()
+    new_password = data.get('new_password', '').strip()
 
     if not phone_number or not new_password:
         return jsonify({'error': 'Missing phone number or new password'}), 400
@@ -111,7 +117,11 @@ def reset_password():
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Обновлён пароль для: {phone_number}")
     return jsonify({'status': 'Password updated successfully'}), 200
 
+# ▶️ Тестовый эндпоинт (опционально)
+@app.route('/api/ping')
+def ping():
+    return jsonify({'status': 'pong'}), 200
+
 # ▶️ Запуск
 if __name__ == '__main__':
     app.run(debug=True)
-
