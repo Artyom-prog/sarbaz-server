@@ -10,11 +10,20 @@ app = Flask(__name__)
 # 🔐 Конфигурация
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'supersecretkey')  # можно вынести в Render env
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'supersecretkey')
 
 db = SQLAlchemy(app)
 
-# 🔧 Модель пользователя
+# 🔄 Функция нормализации телефона к формату +7XXXXXXXXXX
+def normalize_phone(phone):
+    digits = ''.join(filter(str.isdigit, phone))
+    if digits.startswith('8'):
+        digits = '7' + digits[1:]
+    elif not digits.startswith('7'):
+        digits = '7' + digits  # fallback, если ввели без кода
+    return f'+{digits}'
+
+# 💾 Модель пользователя
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
@@ -23,7 +32,7 @@ class User(db.Model):
     time = db.Column(db.String(30), nullable=False)
     is_premium = db.Column(db.Boolean, default=False)
 
-# ✅ JWT генерация токена
+# ✅ JWT токен
 def generate_token(user):
     payload = {
         'user_id': user.id,
@@ -32,13 +41,13 @@ def generate_token(user):
     }
     return jwt.encode(payload, app.config['SECRET_KEY'], algorithm='HS256')
 
-# ✅ Регистрация пользователя
+# ✅ Регистрация
 @app.route('/api/register', methods=['POST'])
 def register():
     data = request.get_json()
 
     name = data.get('name', '').strip()
-    phone_number = data.get('phone_number', '').strip()
+    phone_number = normalize_phone(data.get('phone_number', '').strip())  # 🔄
     password = data.get('password', '').strip()
     is_premium = data.get('is_premium', False)
     time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -72,11 +81,11 @@ def register():
         'time': user.time
     }}), 201
 
-# ✅ Вход пользователя
+# ✅ Вход
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.get_json()
-    phone_number = data.get('phone_number', '').strip()
+    phone_number = normalize_phone(data.get('phone_number', '').strip())  # 🔄
     password = data.get('password', '').strip()
 
     if not phone_number or not password:
@@ -101,7 +110,7 @@ def login():
 @app.route('/api/reset_password', methods=['POST'])
 def reset_password():
     data = request.get_json()
-    phone_number = data.get('phone_number', '').strip()
+    phone_number = normalize_phone(data.get('phone_number', '').strip())  # 🔄
     new_password = data.get('new_password', '').strip()
 
     if not phone_number or not new_password:
@@ -117,7 +126,7 @@ def reset_password():
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Обновлён пароль для: {phone_number}")
     return jsonify({'status': 'Password updated successfully'}), 200
 
-# ▶️ Тестовый эндпоинт (опционально)
+# ▶️ Пинг
 @app.route('/api/ping')
 def ping():
     return jsonify({'status': 'pong'}), 200
