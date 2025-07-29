@@ -191,6 +191,41 @@ def logout():
     logger.info(f'Выход выполнен: {phone_number}')
     return jsonify({'success': True, 'status': 'Logged out successfully'}), 200
 
+# Эндпоинт для удаления аккаунта
+@app.route('/api/delete_account', methods=['DELETE'])
+def delete_account():
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.startswith('Bearer '):
+        logger.warning('Отсутствует или неверный токен для удаления аккаунта')
+        return jsonify({'success': False, 'error': 'Missing or invalid token'}), 401
+
+    token = auth_header.split(' ')[1]
+    phone_number = verify_token(token)
+    if not phone_number:
+        logger.warning('Неверный или истекший токен')
+        return jsonify({'success': False, 'error': 'Invalid or expired token'}), 401
+
+    data = request.get_json()
+    requested_phone = normalize_phone(data.get('phone_number', '').strip())
+    if phone_number != requested_phone:
+        logger.warning(f'Токен не соответствует номеру телефона: {requested_phone}')
+        return jsonify({'success': False, 'error': 'Token does not match phone number'}), 403
+
+    user = User.query.filter_by(phone_number=phone_number).first()
+    if not user:
+        logger.warning(f'Пользователь не найден: {phone_number}')
+        return jsonify({'success': False, 'error': 'User not found'}), 404
+
+    try:
+        db.session.delete(user)
+        db.session.commit()
+        logger.info(f'Аккаунт удален: {phone_number}')
+        return jsonify({'success': True, 'status': 'Account deleted successfully'}), 200
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'Ошибка при удалении аккаунта: {str(e)}')
+        return jsonify({'success': False, 'error': 'Database error'}), 500
+
 # Эндпоинт для проверки сервера
 @app.route('/api/ping', methods=['GET'])
 def ping():
