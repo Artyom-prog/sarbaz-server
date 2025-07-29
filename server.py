@@ -1,16 +1,28 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import jwt
+import logging
 
 app = Flask(__name__)
 
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('app.log')
+    ]
+)
+logger = logging.getLogger(__name__)
+
 # Конфигурация
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///users.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'supersecretkey')
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(32).hex())
 
 db = SQLAlchemy(app)
 
@@ -32,28 +44,44 @@ def normalize_phone(phone):
         digits = '7' + digits
     return f'+{digits}'
 
-# Эндпоинт для сброса пароля
-@app.route('/api/reset_password', methods=['POST'])
-def reset_password():
+# Проверка JWT-токена
+def verify_token(token):
+    try:
+        data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
+        return data['phone_number']
+    except jwt.ExpiredSignatureError:
+        return None
+    except jwt.InvalidTokenError:
+        return None
+
+# Эндпоинт для входа
+@app.route('/api/login', methods=['POST'])
+def login():
     data = request.get_json()
     phone_number = normalize_phone(data.get('phone_number', '').strip())
-    new_password = data.get('new_password', '').strip()
+    password = data.get('password', '').strip()
 
-    if not phone_number or not new_password:
-        return jsonify({'error': 'Missing phone number or new password'}), 400
-
-    if len(new_password) < 6:
-        return jsonify({'error': 'Password must be at least 6 characters'}), 400
+    if not phone_number or not password:
+        logger.warning('Отсутствует номер телефона или пароль')
+        return jsonify({'success': False, 'error': 'Missing phone number or password'}), 400
 
     user = User.query.filter_by(phone_number=phone_number).first()
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
+    if not user or not check_password_hash(user.password, password):
+        logger.warning(f'Неверные учетные данные: {phone_number}')
+        return jsonify({'success': False, 'error': 'Invalid credentials'}), 401
 
-    user.password = generate_password_hash(new_password)
-    db.session.commit()
+    token = jwt.encode(
+        {'phone_number': phone_number, 'exp': datetime.utcnow() + timedelta(hours=24)},
+        app.config['SECRET_KEY'],
+        algorithm='HS256'
+    )
 
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Обновлён пароль для: {phone_number}")
-    return jsonify({'status': 'Password updated successfully'}), 200
+    logger.info(f'Вход выполнен: {phone_number}')
+    return jsonify({
+        'success': True,
+        'token': token,
+        'user': {'name': user.name, 'phone_number': phone_number, 'is_premium': user.is_premium}
+    }), 200
 
 # Эндпоинт для регистрации
 @app.route('/api/register', methods=['POST'])
@@ -65,20 +93,27 @@ def register():
     is_premium = data.get('is_premium', False)
 
     if not name or not phone_number or not password:
-        return jsonify({'error': 'Missing required fields'}), 400
+        logger.warning('Отсутствуют обязательные поля')
+        return jsonify({'success': False, 'error': 'Missing required fields'}), 400
 
     if User.query.filter_by(phone_number=phone_number).first():
-        return jsonify({'error': 'Phone number already exists'}), 409
+        logger.warning(f'Номер телефона уже существует: {phone_number}')
+        return jsonify({'success': False, 'error': 'Phone number already exists'}), 409
 
-    user = User(
-        name=name,
-        phone_number=phone_number,
-        password=generate_password_hash(password),
-        time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        is_premium=is_premium
-    )
-    db.session.add(user)
-    db.session.commit()
+    try:
+        user = User(
+            name=name,
+            phone_number=phone_number,
+            password=generate_password_hash(password, method='pbkdf2:sha256'),
+            time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            is_premium=is_premium
+        )
+        db.session.add(user)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'Ошибка при регистрации: {str(e)}')
+        return jsonify({'success': False, 'error': 'Database error'}), 500
 
     token = jwt.encode(
         {'phone_number': phone_number, 'exp': datetime.utcnow() + timedelta(hours=24)},
@@ -86,36 +121,81 @@ def register():
         algorithm='HS256'
     )
 
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Зарегистрирован: {phone_number}")
-    return jsonify({'token': token, 'user': {'name': name, 'phone_number': phone_number, 'is_premium': is_premium}}), 201
+    logger.info(f'Зарегистрирован: {phone_number}')
+    return jsonify({
+        'success': True,
+        'token': token,
+        'user': {'name': name, 'phone_number': phone_number, 'is_premium': is_premium}
+    }), 201
 
-# Эндпоинт для входа
-@app.route('/api/login', methods=['POST'])
-def login():
+# Эндпоинт для сброса пароля
+@app.route('/api/reset_password', methods=['POST'])
+def reset_password():
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.startswith('Bearer '):
+        logger.warning('Отсутствует или неверный токен для сброса пароля')
+        return jsonify({'success': False, 'error': 'Missing or invalid token'}), 401
+
+    token = auth_header.split(' ')[1]
+    phone_number = verify_token(token)
+    if not phone_number:
+        logger.warning('Неверный или истекший токен')
+        return jsonify({'success': False, 'error': 'Invalid or expired token'}), 401
+
     data = request.get_json()
-    phone_number = normalize_phone(data.get('phone_number', '').strip())
-    password = data.get('password', '').strip()
+    requested_phone = normalize_phone(data.get('phone_number', '').strip())
+    new_password = data.get('new_password', '').strip()
 
-    if not phone_number or not password:
-        return jsonify({'error': 'Missing phone number or password'}), 400
+    if phone_number != requested_phone:
+        logger.warning(f'Токен не соответствует номеру телефона: {requested_phone}')
+        return jsonify({'success': False, 'error': 'Token does not match phone number'}), 403
+
+    if not new_password:
+        logger.warning('Отсутствует новый пароль')
+        return jsonify({'success': False, 'error': 'Missing new password'}), 400
+
+    if len(new_password) < 6:
+        logger.warning('Пароль слишком короткий')
+        return jsonify({'success': False, 'error': 'Password must be at least 6 characters'}), 400
 
     user = User.query.filter_by(phone_number=phone_number).first()
-    if not user or not check_password_hash(user.password, password):
-        return jsonify({'error': 'Invalid credentials'}), 401
+    if not user:
+        logger.warning(f'Пользователь не найден: {phone_number}')
+        return jsonify({'success': False, 'error': 'User not found'}), 404
 
-    token = jwt.encode(
-        {'phone_number': phone_number, 'exp': datetime.utcnow() + timedelta(hours=24)},
-        app.config['SECRET_KEY'],
-        algorithm='HS256'
-    )
+    try:
+        user.password = generate_password_hash(new_password, method='pbkdf2:sha256')
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'Ошибка при сбросе пароля: {str(e)}')
+        return jsonify({'success': False, 'error': 'Database error'}), 500
 
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Вход выполнен: {phone_number}")
-    return jsonify({'token': token, 'user': {'name': user.name, 'phone_number': phone_number, 'is_premium': user.is_premium}}), 200
+    logger.info(f'Пароль обновлен для: {phone_number}')
+    return jsonify({'success': True, 'status': 'Password updated successfully'}), 200
+
+# Эндпоинт для выхода
+@app.route('/api/logout', methods=['POST'])
+def logout():
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.startswith('Bearer '):
+        logger.warning('Отсутствует или неверный токен для выхода')
+        return jsonify({'success': False, 'error': 'Missing or invalid token'}), 401
+
+    token = auth_header.split(' ')[1]
+    phone_number = verify_token(token)
+    if not phone_number:
+        logger.warning('Неверный или истекший токен')
+        return jsonify({'success': False, 'error': 'Invalid or expired token'}), 401
+
+    logger.info(f'Выход выполнен: {phone_number}')
+    return jsonify({'success': True, 'status': 'Logged out successfully'}), 200
 
 # Эндпоинт для проверки сервера
 @app.route('/api/ping', methods=['GET'])
 def ping():
-    return jsonify({'status': 'Server is running'}), 200
+    logger.info('Проверка сервера')
+    return jsonify({'success': True, 'status': 'Server is running'}), 200
 
 if __name__ == '__main__':
     with app.app_context():
