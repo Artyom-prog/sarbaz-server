@@ -32,11 +32,19 @@ service_account = os.environ.get('FIREBASE_SERVICE_ACCOUNT')
 if not service_account:
     logger.error("Переменная окружения FIREBASE_SERVICE_ACCOUNT не найдена")
     raise ValueError("Переменная окружения FIREBASE_SERVICE_ACCOUNT не настроена")
+
 try:
-    cred = credentials.Certificate(json.loads(service_account))
+    service_account_dict = json.loads(service_account)
+    
+    # 🔧 Преобразуем все `\\n` в настоящие переводы строк `\n` в private_key
+    if "private_key" in service_account_dict:
+        service_account_dict["private_key"] = service_account_dict["private_key"].replace("\\n", "\n")
+    
+    cred = credentials.Certificate(service_account_dict)
 except Exception as e:
     logger.error(f"Ошибка парсинга Firebase учетных данных: {str(e)}")
     raise
+
 firebase_admin.initialize_app(cred)
 
 db = SQLAlchemy(app)
