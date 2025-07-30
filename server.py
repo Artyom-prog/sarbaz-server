@@ -26,8 +26,16 @@ app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:/
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(32).hex())
 
-# Инициализация Firebase Admin SDK
-cred = credentials.Certificate('path/to/serviceAccountKey.json')  # Замените на путь к файлу из Firebase Console
+# Инициализация Firebase с переменной окружения
+service_account = os.environ.get('FIREBASE_SERVICE_ACCOUNT')
+if not service_account:
+    logger.error("Переменная окружения FIREBASE_SERVICE_ACCOUNT не найдена")
+    raise ValueError("Переменная окружения FIREBASE_SERVICE_ACCOUNT не настроена")
+try:
+    cred = credentials.Certificate(json.loads(service_account))
+except Exception as e:
+    logger.error(f"Ошибка парсинга Firebase учетных данных: {str(e)}")
+    raise
 firebase_admin.initialize_app(cred)
 
 db = SQLAlchemy(app)
