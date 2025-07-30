@@ -5,6 +5,8 @@ from datetime import datetime, timedelta
 import os
 import jwt
 import logging
+import firebase_admin
+from firebase_admin import credentials, auth
 
 app = Flask(__name__)
 
@@ -23,6 +25,10 @@ logger = logging.getLogger(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///users.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(32).hex())
+
+# Инициализация Firebase Admin SDK
+cred = credentials.Certificate('path/to/serviceAccountKey.json')  # Замените на путь к файлу из Firebase Console
+firebase_admin.initialize_app(cred)
 
 db = SQLAlchemy(app)
 
@@ -44,8 +50,8 @@ def normalize_phone(phone):
         digits = '7' + digits
     return f'+{digits}'
 
-# Проверка JWT-токена
-def verify_token(token):
+# Проверка JWT-токена (оставляем для других эндпоинтов)
+def verify_jwt_token(token):
     try:
         data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
         return data['phone_number']
@@ -128,7 +134,7 @@ def register():
         'user': {'name': name, 'phone_number': phone_number, 'is_premium': is_premium}
     }), 201
 
-# Эндпоинт для сброса пароля
+# Эндпоинт для сброса пароля с Firebase ID-токеном
 @app.route('/api/reset_password', methods=['POST'])
 def reset_password():
     auth_header = request.headers.get('Authorization')
@@ -136,10 +142,15 @@ def reset_password():
         logger.warning('Отсутствует или неверный токен для сброса пароля')
         return jsonify({'success': False, 'error': 'Missing or invalid token'}), 401
 
-    token = auth_header.split(' ')[1]
-    phone_number = verify_token(token)
-    if not phone_number:
-        logger.warning('Неверный или истекший токен')
+    try:
+        id_token = auth_header.split(' ')[1]
+        decoded_token = auth.verify_id_token(id_token)  # Проверка Firebase ID-токена
+        phone_number = decoded_token.get('phone_number')
+        if not phone_number:
+            logger.warning('Отсутствует номер телефона в Firebase токене')
+            return jsonify({'success': False, 'error': 'Invalid token data'}), 401
+    except Exception as e:
+        logger.warning(f'Неверный Firebase токен: {str(e)}')
         return jsonify({'success': False, 'error': 'Invalid or expired token'}), 401
 
     data = request.get_json()
@@ -183,7 +194,7 @@ def logout():
         return jsonify({'success': False, 'error': 'Missing or invalid token'}), 401
 
     token = auth_header.split(' ')[1]
-    phone_number = verify_token(token)
+    phone_number = verify_jwt_token(token)  # Используем JWT для logout
     if not phone_number:
         logger.warning('Неверный или истекший токен')
         return jsonify({'success': False, 'error': 'Invalid or expired token'}), 401
@@ -200,7 +211,7 @@ def delete_account():
         return jsonify({'success': False, 'error': 'Missing or invalid token'}), 401
 
     token = auth_header.split(' ')[1]
-    phone_number = verify_token(token)
+    phone_number = verify_jwt_token(token)  # Используем JWT для delete_account
     if not phone_number:
         logger.warning('Неверный или истекший токен')
         return jsonify({'success': False, 'error': 'Invalid or expired token'}), 401
