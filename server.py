@@ -11,7 +11,7 @@ from firebase_admin import credentials, auth
 
 app = Flask(__name__)
 
-# Настройка логирования
+# 🔧 Логирование
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
@@ -22,34 +22,29 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Конфигурация
+# 🔧 Конфигурация
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///users.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(32).hex())
 
-# Инициализация Firebase с переменной окружения
+# 🔥 Firebase инициализация
 service_account = os.environ.get('FIREBASE_SERVICE_ACCOUNT')
 if not service_account:
-    logger.error("Переменная окружения FIREBASE_SERVICE_ACCOUNT не найдена")
-    raise ValueError("Переменная окружения FIREBASE_SERVICE_ACCOUNT не настроена")
+    logger.error("FIREBASE_SERVICE_ACCOUNT не найдена")
+    raise ValueError("FIREBASE_SERVICE_ACCOUNT не настроена")
 
 try:
     service_account_dict = json.loads(service_account)
-    
-    # 🔧 Преобразуем все `\\n` в настоящие переводы строк `\n` в private_key
-    if "private_key" in service_account_dict:
-        service_account_dict["private_key"] = service_account_dict["private_key"].replace("\\n", "\n")
-    
+    service_account_dict["private_key"] = service_account_dict["private_key"].replace("\\n", "\n")
     cred = credentials.Certificate(service_account_dict)
+    firebase_admin.initialize_app(cred)
 except Exception as e:
-    logger.error(f"Ошибка парсинга Firebase учетных данных: {str(e)}")
+    logger.error(f"Ошибка инициализации Firebase: {e}")
     raise
 
-firebase_admin.initialize_app(cred)
-
+# 📦 БД
 db = SQLAlchemy(app)
 
-# Модель пользователя
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
@@ -58,7 +53,7 @@ class User(db.Model):
     time = db.Column(db.String(30), nullable=False)
     is_premium = db.Column(db.Boolean, default=False)
 
-# Нормализация телефона
+# 📞 Нормализация номера
 def normalize_phone(phone):
     digits = ''.join(filter(str.isdigit, phone))
     if digits.startswith('8'):
@@ -67,30 +62,23 @@ def normalize_phone(phone):
         digits = '7' + digits
     return f'+{digits}'
 
-# Проверка JWT-токена (оставляем для других эндпоинтов)
+# 🔐 JWT проверка
 def verify_jwt_token(token):
     try:
         data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
         return data['phone_number']
-    except jwt.ExpiredSignatureError:
-        return None
-    except jwt.InvalidTokenError:
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
         return None
 
-# Эндпоинт для входа
+# ✅ /api/login
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.get_json()
     phone_number = normalize_phone(data.get('phone_number', '').strip())
     password = data.get('password', '').strip()
 
-    if not phone_number or not password:
-        logger.warning('Отсутствует номер телефона или пароль')
-        return jsonify({'success': False, 'error': 'Missing phone number or password'}), 400
-
     user = User.query.filter_by(phone_number=phone_number).first()
     if not user or not check_password_hash(user.password, password):
-        logger.warning(f'Неверные учетные данные: {phone_number}')
         return jsonify({'success': False, 'error': 'Invalid credentials'}), 401
 
     token = jwt.encode(
@@ -106,7 +94,7 @@ def login():
         'user': {'name': user.name, 'phone_number': phone_number, 'is_premium': user.is_premium}
     }), 200
 
-# Эндпоинт для регистрации
+# ✅ /api/register
 @app.route('/api/register', methods=['POST'])
 def register():
     data = request.get_json()
@@ -115,28 +103,18 @@ def register():
     password = data.get('password', '').strip()
     is_premium = data.get('is_premium', False)
 
-    if not name or not phone_number or not password:
-        logger.warning('Отсутствуют обязательные поля')
-        return jsonify({'success': False, 'error': 'Missing required fields'}), 400
-
     if User.query.filter_by(phone_number=phone_number).first():
-        logger.warning(f'Номер телефона уже существует: {phone_number}')
         return jsonify({'success': False, 'error': 'Phone number already exists'}), 409
 
-    try:
-        user = User(
-            name=name,
-            phone_number=phone_number,
-            password=generate_password_hash(password, method='pbkdf2:sha256'),
-            time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            is_premium=is_premium
-        )
-        db.session.add(user)
-        db.session.commit()
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f'Ошибка при регистрации: {str(e)}')
-        return jsonify({'success': False, 'error': 'Database error'}), 500
+    user = User(
+        name=name,
+        phone_number=phone_number,
+        password=generate_password_hash(password),
+        time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        is_premium=is_premium
+    )
+    db.session.add(user)
+    db.session.commit()
 
     token = jwt.encode(
         {'phone_number': phone_number, 'exp': datetime.utcnow() + timedelta(hours=24)},
@@ -151,113 +129,105 @@ def register():
         'user': {'name': name, 'phone_number': phone_number, 'is_premium': is_premium}
     }), 201
 
-# Эндпоинт для сброса пароля с Firebase ID-токеном
+# ✅ /api/verify
+@app.route('/api/verify', methods=['POST'])
+def verify():
+    data = request.get_json()
+    token = data.get('token')
+    phone = data.get('phone')
+
+    real_phone = verify_jwt_token(token)
+    if real_phone == phone:
+        logger.info(f'✅ Верификация успешна: {phone}')
+        return jsonify({'success': True}), 200
+    else:
+        logger.warning(f'❌ Верификация не удалась: {phone}')
+        return jsonify({'success': False, 'error': 'Invalid or expired token'}), 401
+
+# ✅ /api/restore
+@app.route('/api/restore', methods=['POST'])
+def restore():
+    data = request.get_json()
+    phone = normalize_phone(data.get('phone'))
+    user = User.query.filter_by(phone_number=phone).first()
+
+    if not user:
+        return jsonify({'success': False, 'error': 'User not found'}), 404
+
+    token = jwt.encode(
+        {'phone_number': phone, 'exp': datetime.utcnow() + timedelta(hours=24)},
+        app.config['SECRET_KEY'],
+        algorithm='HS256'
+    )
+
+    logger.info(f'🔁 Восстановление токена: {phone}')
+    return jsonify({
+        'success': True,
+        'token': token,
+        'user': {'name': user.name, 'phone_number': phone, 'is_premium': user.is_premium}
+    }), 200
+
+# ✅ /api/reset_password
 @app.route('/api/reset_password', methods=['POST'])
 def reset_password():
     auth_header = request.headers.get('Authorization')
     if not auth_header or not auth_header.startswith('Bearer '):
-        logger.warning('Отсутствует или неверный токен для сброса пароля')
-        return jsonify({'success': False, 'error': 'Missing or invalid token'}), 401
+        return jsonify({'success': False, 'error': 'Missing token'}), 401
 
+    id_token = auth_header.split(' ')[1]
     try:
-        id_token = auth_header.split(' ')[1]
-        decoded_token = auth.verify_id_token(id_token)  # Проверка Firebase ID-токена
-        phone_number = decoded_token.get('phone_number')
-        if not phone_number:
-            logger.warning('Отсутствует номер телефона в Firebase токене')
-            return jsonify({'success': False, 'error': 'Invalid token data'}), 401
-    except Exception as e:
-        logger.warning(f'Неверный Firebase токен: {str(e)}')
-        return jsonify({'success': False, 'error': 'Invalid or expired token'}), 401
+        decoded = auth.verify_id_token(id_token)
+        phone = normalize_phone(decoded.get('phone_number'))
+    except Exception:
+        return jsonify({'success': False, 'error': 'Invalid Firebase token'}), 401
 
     data = request.get_json()
-    requested_phone = normalize_phone(data.get('phone_number', '').strip())
-    new_password = data.get('new_password', '').strip()
+    requested_phone = normalize_phone(data.get('phone_number'))
+    new_password = data.get('new_password', '')
 
-    if phone_number != requested_phone:
-        logger.warning(f'Токен не соответствует номеру телефона: {requested_phone}')
+    if phone != requested_phone:
         return jsonify({'success': False, 'error': 'Token does not match phone number'}), 403
 
-    if not new_password:
-        logger.warning('Отсутствует новый пароль')
-        return jsonify({'success': False, 'error': 'Missing new password'}), 400
-
-    if len(new_password) < 6:
-        logger.warning('Пароль слишком короткий')
-        return jsonify({'success': False, 'error': 'Password must be at least 6 characters'}), 400
-
-    user = User.query.filter_by(phone_number=phone_number).first()
+    user = User.query.filter_by(phone_number=phone).first()
     if not user:
-        logger.warning(f'Пользователь не найден: {phone_number}')
         return jsonify({'success': False, 'error': 'User not found'}), 404
 
-    try:
-        user.password = generate_password_hash(new_password, method='pbkdf2:sha256')
-        db.session.commit()
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f'Ошибка при сбросе пароля: {str(e)}')
-        return jsonify({'success': False, 'error': 'Database error'}), 500
+    user.password = generate_password_hash(new_password)
+    db.session.commit()
 
-    logger.info(f'Пароль обновлен для: {phone_number}')
-    return jsonify({'success': True, 'status': 'Password updated successfully'}), 200
+    logger.info(f'Пароль обновлён: {phone}')
+    return jsonify({'success': True}), 200
 
-# Эндпоинт для выхода
-@app.route('/api/logout', methods=['POST'])
-def logout():
-    auth_header = request.headers.get('Authorization')
-    if not auth_header or not auth_header.startswith('Bearer '):
-        logger.warning('Отсутствует или неверный токен для выхода')
-        return jsonify({'success': False, 'error': 'Missing or invalid token'}), 401
-
-    token = auth_header.split(' ')[1]
-    phone_number = verify_jwt_token(token)  # Используем JWT для logout
-    if not phone_number:
-        logger.warning('Неверный или истекший токен')
-        return jsonify({'success': False, 'error': 'Invalid or expired token'}), 401
-
-    logger.info(f'Выход выполнен: {phone_number}')
-    return jsonify({'success': True, 'status': 'Logged out successfully'}), 200
-
-# Эндпоинт для удаления аккаунта
+# ✅ /api/delete_account
 @app.route('/api/delete_account', methods=['DELETE'])
 def delete_account():
     auth_header = request.headers.get('Authorization')
     if not auth_header or not auth_header.startswith('Bearer '):
-        logger.warning('Отсутствует или неверный токен для удаления аккаунта')
-        return jsonify({'success': False, 'error': 'Missing or invalid token'}), 401
+        return jsonify({'success': False, 'error': 'Missing token'}), 401
 
     token = auth_header.split(' ')[1]
-    phone_number = verify_jwt_token(token)  # Используем JWT для delete_account
-    if not phone_number:
-        logger.warning('Неверный или истекший токен')
-        return jsonify({'success': False, 'error': 'Invalid or expired token'}), 401
+    phone = verify_jwt_token(token)
+    if not phone:
+        return jsonify({'success': False, 'error': 'Invalid token'}), 401
 
     data = request.get_json()
-    requested_phone = normalize_phone(data.get('phone_number', '').strip())
-    if phone_number != requested_phone:
-        logger.warning(f'Токен не соответствует номеру телефона: {requested_phone}')
-        return jsonify({'success': False, 'error': 'Token does not match phone number'}), 403
+    requested_phone = normalize_phone(data.get('phone_number'))
 
-    user = User.query.filter_by(phone_number=phone_number).first()
+    if requested_phone != phone:
+        return jsonify({'success': False, 'error': 'Token mismatch'}), 403
+
+    user = User.query.filter_by(phone_number=phone).first()
     if not user:
-        logger.warning(f'Пользователь не найден: {phone_number}')
         return jsonify({'success': False, 'error': 'User not found'}), 404
 
-    try:
-        db.session.delete(user)
-        db.session.commit()
-        logger.info(f'Аккаунт удален: {phone_number}')
-        return jsonify({'success': True, 'status': 'Account deleted successfully'}), 200
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f'Ошибка при удалении аккаунта: {str(e)}')
-        return jsonify({'success': False, 'error': 'Database error'}), 500
+    db.session.delete(user)
+    db.session.commit()
+    logger.info(f'Удалён аккаунт: {phone}')
+    return jsonify({'success': True}), 200
 
-# Эндпоинт для проверки сервера
+# ✅ /api/ping
 @app.route('/api/ping', methods=['GET'])
 def ping():
-    logger.info('Проверка сервера')
     return jsonify({'success': True, 'status': 'Server is running'}), 200
 
 if __name__ == '__main__':
