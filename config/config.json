@@ -1,4 +1,6 @@
 {
-  "latestVersion": "1.3.0",
-  "minSupportedVersion": "1.1.0"
+  "latestVersion": "1.0.1",
+  "latestBuild": 11,
+  "minSupportedVersion": "1.0.1",
+  "minSupportedBuild": 11
 }
