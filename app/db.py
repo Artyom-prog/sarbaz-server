@@ -1,9 +1,12 @@
+# Подключение к PostgreSQL (той же базе, что и OSA)
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
+import os
 
-DATABASE_URL = "sqlite:///./app.db"  # потом заменим на Postgres OSA
+DATABASE_URL = os.getenv("DATABASE_URL")  # строка подключения Render
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
