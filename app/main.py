@@ -2,39 +2,37 @@ from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 from jose import jwt
 from datetime import datetime, timedelta
-import os
+import os, json
 import firebase_admin
 from firebase_admin import auth, credentials
 
-from .db import SessionLocal, engine, Base
+from .db import SessionLocal
 from .models import UserSarbaz
 
 
 # --------------------------------------------------
-# Создаём таблицы (для первого запуска)
+# Инициализация Firebase Admin SDK (через ENV)
 # --------------------------------------------------
-Base.metadata.create_all(bind=engine)
+firebase_json = os.getenv("FIREBASE_CREDENTIALS")
+if not firebase_json:
+    raise RuntimeError("FIREBASE_CREDENTIALS is not set")
 
-
-# --------------------------------------------------
-# Инициализация Firebase Admin SDK
-# --------------------------------------------------
-cred = credentials.Certificate("config/firebase.json")
+cred = credentials.Certificate(json.loads(firebase_json))
 firebase_admin.initialize_app(cred)
 
 
 # --------------------------------------------------
 # Настройки JWT Sarbaz
 # --------------------------------------------------
-JWT_SECRET = os.getenv("JWT_SECRET", "sarbaz_secret")
+JWT_SECRET = os.getenv("JWT_SECRET")
+if not JWT_SECRET:
+    raise RuntimeError("JWT_SECRET is not set")
+
 JWT_EXPIRE_HOURS = 24
 
 
 def create_token(uid: str) -> str:
-    """
-    Создание JWT токена Sarbaz.
-    Внутри хранится firebase_uid пользователя.
-    """
+    """Создание JWT токена Sarbaz."""
     payload = {
         "sub": uid,
         "iss": "sarbaz",
@@ -90,22 +88,29 @@ def social_login(data: dict, db: Session = Depends(get_db)):
     uid = decoded["uid"]
     email = decoded.get("email")
     name = decoded.get("name")
+    provider = decoded.get("firebase", {}).get("sign_in_provider")
 
-    # Ищем пользователя в таблице Sarbaz
+    # Ищем пользователя в таблице users_sarbaz (БД OSA)
     user = db.query(UserSarbaz).filter_by(firebase_uid=uid).first()
 
-    # Если нет — создаём
+    # Если нет — создаём запись
     if not user:
         user = UserSarbaz(
             firebase_uid=uid,
             email=email,
             name=name,
+            provider=provider,
+            last_login_at=datetime.utcnow(),
         )
         db.add(user)
         db.commit()
         db.refresh(user)
+    else:
+        # обновляем время последнего входа
+        user.last_login_at = datetime.utcnow()
+        db.commit()
 
-    # Создаём JWT Sarbaz
+    # создаём JWT Sarbaz
     token = create_token(uid)
 
     return {
