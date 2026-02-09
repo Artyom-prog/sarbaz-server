@@ -1,7 +1,6 @@
-# Модель пользователя Sarbaz
-# Таблица отдельная, но база общая с OSA
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text
+from sqlalchemy.sql import func
 
-from sqlalchemy import Column, Integer, String, Boolean
 from .db import Base
 
 
@@ -10,14 +9,30 @@ class UserSarbaz(Base):
 
     id = Column(Integer, primary_key=True, index=True)
 
-    # UID из Firebase (главный идентификатор)
-    firebase_uid = Column(String, unique=True, index=True, nullable=False)
+    # UID из Firebase — главный идентификатор
+    firebase_uid = Column(String(128), unique=True, index=True, nullable=False)
+
+    # провайдер входа (google, apple, etc.)
+    provider = Column(String(32), nullable=True)
 
     # резервный email
-    email = Column(String, nullable=True)
+    email = Column(String(254), nullable=True, index=True)
 
     # имя пользователя
-    name = Column(String, nullable=True)
+    name = Column(String(120), nullable=True)
 
-    # премиум-флаг
-    is_premium = Column(Boolean, default=False)
+    # аватар
+    avatar_url = Column(String(512), nullable=True)
+
+    # премиум
+    is_premium = Column(Boolean, default=False, nullable=False)
+
+    # блокировка
+    is_blocked = Column(Boolean, default=False, nullable=False)
+    blocked_reason = Column(Text, nullable=True)
+
+    # время последнего входа
+    last_login_at = Column(DateTime, nullable=True)
+
+    # дата создания
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
