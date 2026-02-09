@@ -3,7 +3,7 @@ import os
 from functools import lru_cache
 
 # путь к JSON конфигу
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "app_version.json")
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "app_config.json")
 
 
 @lru_cache
