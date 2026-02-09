@@ -1,6 +1,11 @@
-from app import create_app
+from fastapi import FastAPI
+from app.routes.auth import router as auth_router
 
-app = create_app()
+app = FastAPI(title="Sarbaz API")
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
+app.include_router(auth_router)
+
+
+@app.get("/")
+def root():
+    return {"status": "ok"}

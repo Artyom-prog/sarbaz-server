@@ -1,70 +1,69 @@
-from flask import Blueprint, request, jsonify
-from werkzeug.security import generate_password_hash, check_password_hash
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from passlib.hash import bcrypt
 
-from ..extensions import db
+from ..db import SessionLocal
 from ..models import User
-from ..utils import normalize_phone, create_token
 
-auth_bp = Blueprint("auth", __name__, url_prefix="/api")
-
-
-@auth_bp.post("/login")
-def login():
-    data = request.get_json() or {}
-
-    phone = normalize_phone(data.get("phone_number"))
-    password = (data.get("password") or "").strip()
-
-    user = User.query.filter_by(phone_number=phone).first()
-    if not user or not check_password_hash(user.password, password):
-        return jsonify({"success": False, "error": "Invalid credentials"}), 401
-
-    token = create_token(phone)
-
-    return jsonify({
-        "success": True,
-        "token": token,
-        "user": {
-            "name": user.name,
-            "phone_number": phone,
-            "is_premium": user.is_premium
-        }
-    })
+router = APIRouter(prefix="/api", tags=["Auth"])
 
 
-@auth_bp.post("/register")
-def register():
-    data = request.get_json() or {}
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
+
+@router.post("/register")
+def register(data: dict, db: Session = Depends(get_db)):
     name = (data.get("name") or "").strip()
-    phone = normalize_phone(data.get("phone_number"))
+    phone = (data.get("phone_number") or "").strip()
     password = (data.get("password") or "").strip()
     is_premium = bool(data.get("is_premium", False))
 
     if not name or not password:
-        return jsonify({"success": False, "error": "Name and password required"}), 400
+        raise HTTPException(400, "Name and password required")
 
-    if User.query.filter_by(phone_number=phone).first():
-        return jsonify({"success": False, "error": "Phone exists"}), 409
+    if db.query(User).filter_by(phone_number=phone).first():
+        raise HTTPException(409, "Phone exists")
 
     user = User(
         name=name,
         phone_number=phone,
-        password=generate_password_hash(password),
+        password=bcrypt.hash(password),
         is_premium=is_premium,
     )
 
-    db.session.add(user)
-    db.session.commit()
+    db.add(user)
+    db.commit()
 
-    token = create_token(phone)
-
-    return jsonify({
+    return {
         "success": True,
-        "token": token,
         "user": {
             "name": name,
             "phone_number": phone,
-            "is_premium": is_premium
-        }
-    }), 201
+            "is_premium": is_premium,
+        },
+    }
+
+
+@router.post("/login")
+def login(data: dict, db: Session = Depends(get_db)):
+    phone = (data.get("phone_number") or "").strip()
+    password = (data.get("password") or "").strip()
+
+    user = db.query(User).filter_by(phone_number=phone).first()
+
+    if not user or not bcrypt.verify(password, user.password):
+        raise HTTPException(401, "Invalid credentials")
+
+    return {
+        "success": True,
+        "user": {
+            "name": user.name,
+            "phone_number": user.phone_number,
+            "is_premium": user.is_premium,
+        },
+    }

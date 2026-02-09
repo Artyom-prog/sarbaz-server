@@ -1,12 +1,12 @@
-from datetime import datetime
-from .extensions import db
+from sqlalchemy import Column, Integer, String, Boolean
+from .db import Base
 
 
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
-    phone_number = db.Column(db.String(20), nullable=False, unique=True)
-    password = db.Column(db.String(255), nullable=False)
-    time = db.Column(db.String(30), nullable=False,
-                     default=lambda: datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-    is_premium = db.Column(db.Boolean, default=False)
+class User(Base):
+    __tablename__ = "users_sarbaz"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    phone_number = Column(String, unique=True, index=True, nullable=False)
+    password = Column(String, nullable=False)
+    is_premium = Column(Boolean, default=False)

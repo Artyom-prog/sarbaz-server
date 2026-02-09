@@ -1,7 +1,9 @@
-flask
+fastapi
+uvicorn[standard]
 gunicorn
 sqlalchemy
 psycopg2-binary
-Flask-SQLAlchemy
-PyJWT
+python-jose[cryptography]
+passlib[bcrypt]
+pydantic-settings
 firebase-admin==6.5.0
