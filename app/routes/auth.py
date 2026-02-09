@@ -6,8 +6,8 @@ import os, json
 import firebase_admin
 from firebase_admin import auth, credentials
 
-from .db import SessionLocal
-from .models import UserSarbaz
+from app.db import SessionLocal
+from app.models import UserSarbaz
 
 
 router = APIRouter(prefix="/api", tags=["Auth"])
