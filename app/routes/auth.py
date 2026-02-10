@@ -158,6 +158,15 @@ def get_me(uid: str = Depends(get_current_uid), db: Session = Depends(get_db)):
         "is_premium": user.is_premium,
     }
 
+@router.post("/auth/refresh")
+def refresh_token(refresh_token: str):
+    # проверяем refresh token
+    # если валиден → выдаём новый access token
+    return {
+        "access_token": new_access,
+        "refresh_token": new_refresh,
+    }
+
 
 # --------------------------------------------------
 # DELETE /api/me
