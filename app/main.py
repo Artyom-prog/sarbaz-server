@@ -5,10 +5,20 @@ from app.routes.system import router as system_router
 app = FastAPI(title="Sarbaz API")
 
 app.include_router(auth_router)
-
 app.include_router(system_router)
 
 
+# --------------------------------------------------
+# ROOT
+# --------------------------------------------------
 @app.get("/")
 def root():
     return {"status": "ok"}
+
+
+# --------------------------------------------------
+# HEALTH CHECK (для Render)
+# --------------------------------------------------
+@app.get("/health")
+def health():
+    return {"status": "healthy"}
