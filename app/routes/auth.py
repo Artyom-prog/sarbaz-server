@@ -190,6 +190,42 @@ def get_me(uid: str = Depends(get_current_uid), db: Session = Depends(get_db)):
         "is_premium": user.is_premium,
     }
 
+# ==================================================
+# DELETE /api/me  — удаление аккаунта
+# ==================================================
+
+@router.delete("/me")
+def delete_me(uid: str = Depends(get_current_uid), db: Session = Depends(get_db)):
+    """
+    Полное удаление аккаунта пользователя Sarbaz.
+
+    Делает:
+    - удаляет refresh-сессии
+    - удаляет пользователя из БД
+    - удаляет пользователя из Firebase Auth
+    """
+
+    user = db.query(UserSarbaz).filter_by(firebase_uid=uid).first()
+
+    if not user:
+        raise HTTPException(404, "User not found")
+
+    # --- удаляем Firebase-пользователя ---
+    try:
+        auth.delete_user(uid)
+    except Exception:
+        # если уже удалён — не падаем
+        pass
+
+    # --- удаляем refresh-сессии ---
+    db.query(UserSarbazSession).filter_by(user_id=user.id).delete()
+
+    # --- удаляем пользователя ---
+    db.delete(user)
+    db.commit()
+
+    return {"success": True}
+
 
 # ==================================================
 # POST /api/auth/refresh
