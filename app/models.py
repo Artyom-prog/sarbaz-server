@@ -42,13 +42,17 @@ class UserSarbaz(Base):
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
     # связь с сессиями
-    sessions = relationship("UserSarbazSession", back_populates="user")
+    sessions = relationship(
+        "UserSarbazSession",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 # ==========================================================
 # USER SARBAZ SESSIONS
-# Таблица физически создана в OSA БД,
-# поэтому используем extend_existing
+# Таблица физически создана в OSA БД
 # ==========================================================
 class UserSarbazSession(Base):
     __tablename__ = "user_sarbaz_sessions"
@@ -57,10 +61,21 @@ class UserSarbazSession(Base):
     id = Column(Integer, primary_key=True, index=True)
 
     # связь с пользователем Sarbaz
-    user_id = Column(Integer, ForeignKey("users_sarbaz.id"), nullable=False, index=True)
+    user_id = Column(
+        Integer,
+        ForeignKey("users_sarbaz.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
 
-    # JWT / session token
-    token = Column(String(255), unique=True, nullable=False, index=True)
+    # SHA-256 hash refresh-токена (64 символа)
+    refresh_token_hash = Column(String(64), nullable=False, unique=True, index=True)
+
+    # срок жизни refresh
+    expires_at = Column(DateTime, nullable=False, index=True)
+
+    # отзыв токена
+    revoked_at = Column(DateTime, nullable=True, index=True)
 
     # дата создания
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
