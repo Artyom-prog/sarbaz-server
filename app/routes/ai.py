@@ -14,13 +14,13 @@ router = APIRouter(prefix="/api/ai", tags=["AI"])
 
 
 # ===============================
-# OpenAI client
+# Lazy OpenAI client
 # ===============================
-api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    raise RuntimeError("OPENAI_API_KEY not set")
-
-client = OpenAI(api_key=api_key)
+def get_client() -> OpenAI:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured")
+    return OpenAI(api_key=api_key)
 
 
 # ===============================
@@ -67,6 +67,8 @@ async def chat_ai(
         )
 
     try:
+        client = get_client()
+
         completion = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -77,9 +79,12 @@ async def chat_ai(
             max_tokens=500,
         )
 
-        answer = completion.choices[0].message.content
+        answer = completion.choices[0].message.content or ""
 
         return ChatResponse(answer=answer)
 
+    except HTTPException:
+        raise
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"AI error: {str(e)}")
