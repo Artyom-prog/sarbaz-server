@@ -68,17 +68,6 @@ def refresh_expiry() -> datetime:
     return datetime.utcnow() + timedelta(days=REFRESH_EXPIRE_DAYS)
 
 
-# ==================================================
-# DB dependency
-# ==================================================
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
 
 # ==================================================
 # AUTH HEADER
