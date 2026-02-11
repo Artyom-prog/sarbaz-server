@@ -325,3 +325,27 @@ def logout_all(uid: str = Depends(get_current_uid), db: Session = Depends(get_db
     db.commit()
 
     return {"success": True}
+
+# ==================================================
+# CURRENT USER OBJECT (для других роутов, например AI)
+# ==================================================
+
+def get_current_user(
+    uid: str = Depends(get_current_uid),
+    db: Session = Depends(get_db),
+) -> UserSarbaz:
+    """
+    Возвращает полноценный объект пользователя из БД
+    по UID, полученному из JWT.
+    Используется в защищённых эндпоинтах.
+    """
+
+    user = db.query(UserSarbaz).filter_by(firebase_uid=uid).first()
+
+    if not user:
+        raise HTTPException(401, "User not found")
+
+    if user.is_blocked:
+        raise HTTPException(403, "User is blocked")
+
+    return user
