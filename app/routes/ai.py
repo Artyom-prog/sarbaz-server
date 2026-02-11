@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from openai import OpenAI
 
-from app.api.auth import get_current_user
+from app.routes.auth import get_current_user
 from app.db import get_db
 from app.services.ai_limits import check_and_increment_usage
 
