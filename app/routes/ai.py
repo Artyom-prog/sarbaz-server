@@ -69,17 +69,15 @@ async def chat_ai(
     try:
         client = get_client()
 
-        completion = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            input=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": data.message},
             ],
-            temperature=0.3,
-            max_tokens=500,
         )
 
-        answer = completion.choices[0].message.content or ""
+        answer = response.output_text or "Нет ответа от AI."
 
         return ChatResponse(answer=answer)
 
@@ -87,4 +85,6 @@ async def chat_ai(
         raise
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI error: {str(e)}")
+        # 👉 обязательно печатаем в Render logs
+        print("AI ERROR:", repr(e))
+        raise HTTPException(status_code=500, detail="AI временно недоступен")
