@@ -10,7 +10,7 @@ import hashlib
 import firebase_admin
 from firebase_admin import auth, credentials
 
-from app.db import SessionLocal
+from app.db import SessionLocal, get_db
 from app.models import UserSarbaz, UserSarbazSession
 
 
