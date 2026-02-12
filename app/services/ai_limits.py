@@ -7,15 +7,19 @@ from app.models import AIUsage
 FREE_LIMIT = 5
 
 
-def check_and_increment_usage(db: Session, user) -> bool:
+def check_and_increment_usage(db: Session, user):
     """
-    True  -> можно делать запрос
-    False -> лимит достигнут
+    Проверяет лимит и увеличивает счётчик.
+
+    Возвращает:
+        allowed: bool
+        remaining: int
+        is_premium: bool
     """
 
-    # Премиум без лимита
+    # Премиум → безлимит
     if getattr(user, "is_premium", False):
-        return True
+        return True, -1, True
 
     today = date.today()
 
@@ -31,10 +35,14 @@ def check_and_increment_usage(db: Session, user) -> bool:
         db.commit()
         db.refresh(usage)
 
+    # лимит достигнут
     if usage.count >= FREE_LIMIT:
-        return False
+        return False, 0, False
 
+    # увеличиваем счётчик
     usage.count += 1
     db.commit()
 
-    return True
+    remaining = max(FREE_LIMIT - usage.count, 0)
+
+    return True, remaining, False
