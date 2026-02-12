@@ -1,105 +1,37 @@
-import os
-
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from datetime import date
 from sqlalchemy.orm import Session
-from openai import OpenAI
 
-from app.routes.auth import get_current_user
-from app.db import get_db
-from app.services.ai_limits import check_and_increment_usage
+from app.models import AIUsage, UserSarbaz
 
-
-router = APIRouter(prefix="/api/ai", tags=["AI"])
+FREE_LIMIT = 5
 
 
-# ===============================
-# Lazy OpenAI client
-# ===============================
-def get_client() -> OpenAI:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured")
-    return OpenAI(api_key=api_key)
+def get_ai_stats(db: Session, user: UserSarbaz):
+    """
+    Возвращает статистику использования AI за сегодня.
+    """
 
+    # Премиум → безлимит
+    if user.is_premium:
+        return {
+            "used_today": 0,
+            "limit": -1,
+            "remaining": -1,
+        }
 
-# ===============================
-# Schemas
-# ===============================
-class ChatRequest(BaseModel):
-    message: str
+    today = date.today()
 
+    usage = (
+        db.query(AIUsage)
+        .filter(AIUsage.user_id == user.id, AIUsage.day == today)
+        .first()
+    )
 
-class ChatResponse(BaseModel):
-    answer: str
+    used = usage.count if usage else 0
+    remaining = max(FREE_LIMIT - used, 0)
 
-
-SYSTEM_PROMPT = """
-Ты — военный справочный ассистент SarbazInfo по имени «Сержант-братан».
-
-Характер:
-уверенный сержант, говоришь просто, по делу, с лёгким армейским юмором,
-без грубости и оскорблений.
-
-Язык:
-отвечай на языке пользователя.
-Казахский → казахский ответ.
-Русский → русский ответ.
-Языки не смешивай.
-
-Ответы:
-кратко, понятно, без канцелярита.
-Темы только: военная подготовка, ТТХ оружия, медицина, уставы.
-Если не знаешь — честно скажи.
-Факты не выдумывай.
-
-Если спрашивают кто ты:
-«Я Сержант-братан, военный помощник SarbazInfo. Спрашивай, помогу».
-"""
-
-
-# ===============================
-# CHAT ENDPOINT
-# ===============================
-@router.post("/chat", response_model=ChatResponse)
-async def chat_ai(
-    data: ChatRequest,
-    user=Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    # 🔒 проверка лимита
-    allowed, remaining, is_premium = check_and_increment_usage(db, user)
-
-    # ❗ лимит достигнут
-    if not allowed:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "code": "limit_reached",
-                "message": "Дневной лимит 5 запросов исчерпан",
-                "remaining_requests": remaining,
-                "is_premium": is_premium,
-            },
-        )
-
-    try:
-        client = get_client()
-
-        response = client.responses.create(
-            model="gpt-4.1-mini",
-            input=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": data.message},
-            ],
-        )
-
-        answer = response.output_text or "Нет ответа от AI."
-
-        return ChatResponse(answer=answer)
-
-    except HTTPException:
-        raise
-
-    except Exception as e:
-        print("AI ERROR:", repr(e))
-        raise HTTPException(status_code=500, detail="AI временно недоступен")
+    return {
+        "used_today": used,
+        "limit": FREE_LIMIT,
+        "remaining": remaining,
+    }
