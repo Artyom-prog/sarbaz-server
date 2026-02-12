@@ -315,3 +315,39 @@ def logout(data: dict, db: Session = Depends(get_db)):
     db.commit()
 
     return {"success": True}
+
+# ==================================================
+# DELETE /api/me
+# ==================================================
+
+@router.delete("/me")
+def delete_me(
+    user: UserSarbaz = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Полное удаление аккаунта Sarbaz:
+    - удаляет refresh-сессии
+    - удаляет пользователя из БД
+    - удаляет пользователя из Firebase
+    """
+
+    uid = user.firebase_uid
+
+    # --- удаляем все refresh-сессии ---
+    db.query(UserSarbazSession).filter(
+        UserSarbazSession.user_id == user.id
+    ).delete()
+
+    # --- удаляем пользователя из БД ---
+    db.delete(user)
+    db.commit()
+
+    # --- удаляем пользователя из Firebase ---
+    try:
+        auth.delete_user(uid)
+    except Exception as e:
+        # Firebase может уже не иметь пользователя — это не критично
+        logger.warning(f"FIREBASE DELETE FAILED → {str(e)}")
+
+    return {"success": True}
