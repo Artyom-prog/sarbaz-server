@@ -1,3 +1,4 @@
+# app/routes/auth.py (sarbaz-server)
 from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -286,3 +287,31 @@ def refresh_token(data: dict, db: Session = Depends(get_db)):
         "access_token": new_access,
         "refresh_token": new_refresh,
     }
+
+
+# ==================================================
+# POST /api/auth/logout
+# ==================================================
+
+@router.post("/auth/logout")
+def logout(data: dict, db: Session = Depends(get_db)):
+    raw_refresh = data.get("refresh_token")
+    if not raw_refresh:
+        raise HTTPException(400, "refresh_token required")
+
+    token_hash = hash_token(raw_refresh)
+
+    session = (
+        db.query(UserSarbazSession)
+        .filter(UserSarbazSession.refresh_token_hash == token_hash)
+        .first()
+    )
+
+    if not session:
+        # logout должен быть идемпотентным
+        return {"success": True}
+
+    session.revoked_at = datetime.utcnow()
+    db.commit()
+
+    return {"success": True}
