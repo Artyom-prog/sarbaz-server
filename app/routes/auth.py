@@ -1,20 +1,24 @@
 from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from jose import jwt, JWTError
+from jose import jwt
+from jose.exceptions import ExpiredSignatureError, JWTError
 from datetime import datetime, timedelta
 import os
 import json
 import secrets
 import hashlib
+import logging
 import firebase_admin
 from firebase_admin import auth, credentials
 
-from app.db import SessionLocal, get_db
+from app.db import get_db
 from app.models import UserSarbaz, UserSarbazSession
 
 
 router = APIRouter(prefix="/api", tags=["Auth"])
+
+logger = logging.getLogger("auth")
 
 
 # ==================================================
@@ -44,12 +48,19 @@ REFRESH_EXPIRE_DAYS = 30
 
 
 def create_access_token(uid: str) -> str:
+    exp = datetime.utcnow() + timedelta(minutes=JWT_EXPIRE_MINUTES)
+
     payload = {
         "sub": uid,
         "iss": "sarbaz",
-        "exp": datetime.utcnow() + timedelta(minutes=JWT_EXPIRE_MINUTES),
+        "exp": exp,
     }
-    return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+    token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+    logger.info(f"JWT CREATED → uid={uid}, exp={exp}")
+
+    return token
 
 
 # ==================================================
@@ -68,22 +79,58 @@ def refresh_expiry() -> datetime:
     return datetime.utcnow() + timedelta(days=REFRESH_EXPIRE_DAYS)
 
 
-
 # ==================================================
-# AUTH HEADER
+# AUTH HEADER (ГЛАВНОЕ ИСПРАВЛЕНИЕ)
 # ==================================================
 
-def get_current_uid(authorization: str = Header(...)) -> str:
+def get_current_uid(authorization: str = Header(None)) -> str:
+    """
+    Достаёт UID из Bearer JWT.
+    Даёт ПОЛНУЮ диагностику 401.
+    """
+
+    # --- нет header ---
+    if not authorization:
+        logger.warning("AUTH: Missing Authorization header")
+        raise HTTPException(401, "Authorization header missing")
+
+    # --- неправильный формат ---
     if not authorization.startswith("Bearer "):
+        logger.warning(f"AUTH: Invalid header format → {authorization}")
         raise HTTPException(401, "Invalid Authorization header")
 
     token = authorization.split(" ", 1)[1]
 
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-        return payload["sub"]
-    except JWTError:
+
+        uid = payload.get("sub")
+        exp = payload.get("exp")
+
+        logger.info(
+            f"AUTH OK → uid={uid}, exp={exp}, now={datetime.utcnow().timestamp()}"
+        )
+
+        if not uid:
+            logger.warning("AUTH: UID missing in payload")
+            raise HTTPException(401, "Invalid token payload")
+
+        return uid
+
+    # --- истёк ---
+    except ExpiredSignatureError:
+        logger.warning("AUTH: Token expired")
+        raise HTTPException(401, "Token expired")
+
+    # --- любой другой JWT косяк ---
+    except JWTError as e:
+        logger.warning(f"AUTH: Invalid token → {str(e)}")
         raise HTTPException(401, "Invalid token")
+
+    # --- вообще неожиданный косяк ---
+    except Exception as e:
+        logger.error(f"AUTH: Unexpected auth error → {str(e)}")
+        raise HTTPException(401, "Auth error")
 
 
 # ==================================================
@@ -97,7 +144,6 @@ def social_login(data: dict, db: Session = Depends(get_db)):
     if not id_token:
         raise HTTPException(400, "id_token required")
 
-    # --- verify Firebase ---
     try:
         decoded = auth.verify_id_token(id_token)
     except Exception:
@@ -108,10 +154,8 @@ def social_login(data: dict, db: Session = Depends(get_db)):
     name = decoded.get("name") or "User"
     provider = decoded.get("firebase", {}).get("sign_in_provider")
 
-    # --- find user ---
     user = db.query(UserSarbaz).filter_by(firebase_uid=uid).first()
 
-    # --- create if missing ---
     if not user:
         user = UserSarbaz(
             firebase_uid=uid,
@@ -129,11 +173,9 @@ def social_login(data: dict, db: Session = Depends(get_db)):
             db.rollback()
             user = db.query(UserSarbaz).filter_by(firebase_uid=uid).first()
 
-    # --- update login time ---
     user.last_login_at = datetime.utcnow()
     db.commit()
 
-    # --- create refresh session ---
     raw_refresh = generate_refresh_token()
 
     session = UserSarbazSession(
@@ -145,7 +187,6 @@ def social_login(data: dict, db: Session = Depends(get_db)):
     db.add(session)
     db.commit()
 
-    # --- create access ---
     access_token = create_access_token(uid)
 
     return {
@@ -178,163 +219,3 @@ def get_me(uid: str = Depends(get_current_uid), db: Session = Depends(get_db)):
         "name": user.name,
         "is_premium": user.is_premium,
     }
-
-# ==================================================
-# DELETE /api/me  — удаление аккаунта
-# ==================================================
-
-@router.delete("/me")
-def delete_me(uid: str = Depends(get_current_uid), db: Session = Depends(get_db)):
-    """
-    Полное удаление аккаунта пользователя Sarbaz.
-
-    Делает:
-    - удаляет refresh-сессии
-    - удаляет пользователя из БД
-    - удаляет пользователя из Firebase Auth
-    """
-
-    user = db.query(UserSarbaz).filter_by(firebase_uid=uid).first()
-
-    if not user:
-        raise HTTPException(404, "User not found")
-
-    # --- удаляем Firebase-пользователя ---
-    try:
-        auth.delete_user(uid)
-    except Exception:
-        # если уже удалён — не падаем
-        pass
-
-    # --- удаляем refresh-сессии ---
-    db.query(UserSarbazSession).filter_by(user_id=user.id).delete()
-
-    # --- удаляем пользователя ---
-    db.delete(user)
-    db.commit()
-
-    return {"success": True}
-
-
-# ==================================================
-# POST /api/auth/refresh
-# ==================================================
-
-@router.post("/auth/refresh")
-def refresh_token(data: dict, db: Session = Depends(get_db)):
-
-    raw_refresh = data.get("refresh_token")
-    if not raw_refresh:
-        raise HTTPException(400, "refresh_token required")
-
-    token_hash = hash_token(raw_refresh)
-
-    session = (
-        db.query(UserSarbazSession)
-        .filter(UserSarbazSession.refresh_token_hash == token_hash)
-        .first()
-    )
-
-    if not session:
-        raise HTTPException(401, "Invalid refresh token")
-
-    if session.revoked_at is not None:
-        raise HTTPException(401, "Refresh revoked")
-
-    if session.expires_at < datetime.utcnow():
-        raise HTTPException(401, "Refresh expired")
-
-    user = db.query(UserSarbaz).filter_by(id=session.user_id).first()
-    if not user:
-        raise HTTPException(404, "User not found")
-
-    # --- rotate refresh ---
-    session.revoked_at = datetime.utcnow()
-
-    new_refresh = generate_refresh_token()
-
-    new_session = UserSarbazSession(
-        user_id=user.id,
-        refresh_token_hash=hash_token(new_refresh),
-        expires_at=refresh_expiry(),
-    )
-
-    db.add(new_session)
-    db.commit()
-
-    new_access = create_access_token(user.firebase_uid)
-
-    return {
-        "access_token": new_access,
-        "refresh_token": new_refresh,
-    }
-
-
-# ==================================================
-# POST /api/auth/logout
-# ==================================================
-
-@router.post("/auth/logout")
-def logout(data: dict, db: Session = Depends(get_db)):
-
-    raw_refresh = data.get("refresh_token")
-    if not raw_refresh:
-        return {"success": True}
-
-    token_hash = hash_token(raw_refresh)
-
-    session = (
-        db.query(UserSarbazSession)
-        .filter(UserSarbazSession.refresh_token_hash == token_hash)
-        .first()
-    )
-
-    if session:
-        session.revoked_at = datetime.utcnow()
-        db.commit()
-
-    return {"success": True}
-
-
-# ==================================================
-# POST /api/auth/logout-all
-# ==================================================
-
-@router.post("/auth/logout-all")
-def logout_all(uid: str = Depends(get_current_uid), db: Session = Depends(get_db)):
-
-    user = db.query(UserSarbaz).filter_by(firebase_uid=uid).first()
-    if not user:
-        return {"success": True}
-
-    db.query(UserSarbazSession).filter_by(user_id=user.id).update(
-        {"revoked_at": datetime.utcnow()}
-    )
-
-    db.commit()
-
-    return {"success": True}
-
-# ==================================================
-# CURRENT USER OBJECT (для других роутов, например AI)
-# ==================================================
-
-def get_current_user(
-    uid: str = Depends(get_current_uid),
-    db: Session = Depends(get_db),
-) -> UserSarbaz:
-    """
-    Возвращает полноценный объект пользователя из БД
-    по UID, полученному из JWT.
-    Используется в защищённых эндпоинтах.
-    """
-
-    user = db.query(UserSarbaz).filter_by(firebase_uid=uid).first()
-
-    if not user:
-        raise HTTPException(401, "User not found")
-
-    if user.is_blocked:
-        raise HTTPException(403, "User is blocked")
-
-    return user
