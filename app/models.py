@@ -1,52 +1,94 @@
-#  app/models.py (sarbaz-server)
+# ==========================================================
+# USERS SARBAZ
+# ==========================================================
 
-from datetime import date
+from datetime import datetime, date
 
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey, Date
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    Boolean,
+    DateTime,
+    Text,
+    ForeignKey,
+    Date,
+)
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 
 from .db import Base
 
 
-# ==========================================================
-# USERS SARBAZ
-# Основная таблица пользователей Sarbaz (физически в OSA БД)
-# ==========================================================
 class UserSarbaz(Base):
+    """
+    Пользователи Sarbaz (Firebase social login).
+
+    Премиум определяется НЕ флагом,
+    а датой окончания premium_until.
+    """
+
     __tablename__ = "users_sarbaz"
 
     id = Column(Integer, primary_key=True, index=True)
 
-    # UID из Firebase — главный идентификатор пользователя
+    # UID из Firebase
     firebase_uid = Column(String(128), unique=True, index=True, nullable=False)
 
-    # провайдер входа (google, apple и т.д.)
+    # провайдер входа
     provider = Column(String(32), nullable=True)
 
-    # резервный email
+    # email
     email = Column(String(254), nullable=True, index=True)
 
-    # отображаемое имя пользователя
+    # имя и аватар
     name = Column(String(120), nullable=True)
-
-    # ссылка на аватар
     avatar_url = Column(String(512), nullable=True)
 
-    # флаг премиум-доступа (используется для снятия лимитов ИИ)
-    is_premium = Column(Boolean, default=False, nullable=False)
+    # =========================
+    # PREMIUM
+    # =========================
 
-    # блокировка пользователя администратором
+    # дата окончания премиума
+    premium_until = Column(DateTime, nullable=True)
+
+    @property
+    def is_premium(self) -> bool:
+        """
+        True если премиум ещё действует.
+        """
+        if self.premium_until is None:
+            return False
+        return self.premium_until > datetime.utcnow()
+
+    @property
+    def premium_days_left(self) -> int:
+        """
+        Сколько дней осталось премиума.
+        """
+        if not self.is_premium:
+            return 0
+        delta = self.premium_until - datetime.utcnow()
+        return max(delta.days, 0)
+
+    # =========================
+    # BLOCK
+    # =========================
+
     is_blocked = Column(Boolean, default=False, nullable=False)
     blocked_reason = Column(Text, nullable=True)
 
-    # время последнего входа
-    last_login_at = Column(DateTime, nullable=True)
+    # =========================
+    # SERVICE DATES
+    # =========================
 
-    # дата создания пользователя
+    last_login_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
-    # ORM-связь с refresh-сессиями
+    # =========================
+    # RELATIONS
+    # =========================
+
     sessions = relationship(
         "UserSarbazSession",
         back_populates="user",
@@ -54,7 +96,6 @@ class UserSarbaz(Base):
         passive_deletes=True,
     )
 
-    # ORM-связь с использованием ИИ
     ai_usage = relationship(
         "AIUsage",
         back_populates="user",
@@ -62,18 +103,28 @@ class UserSarbaz(Base):
         passive_deletes=True,
     )
 
+    # =========================
+    # DEBUG
+    # =========================
+
+    def __repr__(self) -> str:
+        return (
+            f"<UserSarbaz id={self.id} "
+            f"premium={self.is_premium} "
+            f"until={self.premium_until}>"
+        )
+
 
 # ==========================================================
 # USER SARBAZ SESSIONS
-# Таблица refresh-сессий (физически создана в OSA БД)
 # ==========================================================
+
 class UserSarbazSession(Base):
     __tablename__ = "user_sarbaz_sessions"
     __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True, index=True)
 
-    # ссылка на пользователя Sarbaz
     user_id = Column(
         Integer,
         ForeignKey("users_sarbaz.id", ondelete="CASCADE"),
@@ -81,33 +132,25 @@ class UserSarbazSession(Base):
         index=True,
     )
 
-    # SHA-256 hash refresh-токена (64 символа)
     refresh_token_hash = Column(String(64), nullable=False, unique=True, index=True)
 
-    # срок действия refresh-токена
     expires_at = Column(DateTime, nullable=False, index=True)
-
-    # момент отзыва токена (logout / revoke)
     revoked_at = Column(DateTime, nullable=True, index=True)
 
-    # дата создания записи
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
-    # ORM-связь обратно к пользователю
     user = relationship("UserSarbaz", back_populates="sessions")
 
 
 # ==========================================================
 # AI USAGE
-# Учёт количества запросов к ИИ по дням
-# Таблица также должна быть создана в OSA БД через миграцию
 # ==========================================================
+
 class AIUsage(Base):
     __tablename__ = "ai_usage"
 
     id = Column(Integer, primary_key=True, index=True)
 
-    # пользователь, который сделал запрос к ИИ
     user_id = Column(
         Integer,
         ForeignKey("users_sarbaz.id", ondelete="CASCADE"),
@@ -115,11 +158,11 @@ class AIUsage(Base):
         index=True,
     )
 
-    # день, за который считается лимит
     day = Column(Date, default=date.today, nullable=False, index=True)
 
-    # количество запросов за этот день
     count = Column(Integer, default=0, nullable=False)
 
-    # ORM-связь обратно к пользователю
     user = relationship("UserSarbaz", back_populates="ai_usage")
+
+    def __repr__(self) -> str:
+        return f"<AIUsage user_id={self.user_id} day={self.day} count={self.count}>"
