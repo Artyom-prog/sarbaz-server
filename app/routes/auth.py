@@ -234,3 +234,55 @@ def get_current_user(
         raise HTTPException(403, "User is blocked")
 
     return user
+
+# ==================================================
+# POST /api/auth/refresh
+# ==================================================
+
+@router.post("/auth/refresh")
+def refresh_token(data: dict, db: Session = Depends(get_db)):
+    raw_refresh = data.get("refresh_token")
+    if not raw_refresh:
+        raise HTTPException(400, "refresh_token required")
+
+    token_hash = hash_token(raw_refresh)
+
+    session = (
+        db.query(UserSarbazSession)
+        .filter(UserSarbazSession.refresh_token_hash == token_hash)
+        .first()
+    )
+
+    if not session:
+        raise HTTPException(401, "Invalid refresh token")
+
+    if session.revoked_at is not None:
+        raise HTTPException(401, "Refresh revoked")
+
+    if session.expires_at < datetime.utcnow():
+        raise HTTPException(401, "Refresh expired")
+
+    user = db.query(UserSarbaz).filter_by(id=session.user_id).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+
+    # --- rotate refresh ---
+    session.revoked_at = datetime.utcnow()
+
+    new_refresh = generate_refresh_token()
+
+    new_session = UserSarbazSession(
+        user_id=user.id,
+        refresh_token_hash=hash_token(new_refresh),
+        expires_at=refresh_expiry(),
+    )
+
+    db.add(new_session)
+    db.commit()
+
+    new_access = create_access_token(user.firebase_uid)
+
+    return {
+        "access_token": new_access,
+        "refresh_token": new_refresh,
+    }
