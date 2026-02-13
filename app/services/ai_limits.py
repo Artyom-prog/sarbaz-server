@@ -1,6 +1,5 @@
 from datetime import date
 from sqlalchemy.orm import Session
-
 from app.models import AIUsage
 
 
@@ -13,13 +12,13 @@ def check_and_increment_usage(db: Session, user):
 
     Возвращает:
         allowed: bool
-        remaining: int
+        remaining: int | None
         is_premium: bool
     """
 
-    # Премиум → безлимит
-    if getattr(user, "is_premium", False):
-        return True, -1, True
+    # ===== PREMIUM → безлимит =====
+    if user.is_premium:
+        return True, None, True
 
     today = date.today()
 
@@ -35,11 +34,11 @@ def check_and_increment_usage(db: Session, user):
         db.commit()
         db.refresh(usage)
 
-    # лимит достигнут
+    # ===== лимит достигнут =====
     if usage.count >= FREE_LIMIT:
         return False, 0, False
 
-    # увеличиваем счётчик
+    # ===== увеличиваем счётчик =====
     usage.count += 1
     db.commit()
 
