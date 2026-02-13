@@ -1,17 +1,23 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from datetime import datetime
-import os, json, requests
+import os
+import json
+import requests
 
 from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 
 from app.db import get_db
 from app.routes.auth import get_current_user
-from app.models import UserSarbaz, UserSubscription, AppPurchase
+from app.models import UserSarbaz, AppPurchase
 
 router = APIRouter(prefix="/api/billing", tags=["Billing"])
 
+
+# ==========================================================
+# CONFIG
+# ==========================================================
 
 PACKAGE_NAME = "kz.sarbazinfo5000.app"
 SUB_ID = "sarbaz_premium_monthly"
@@ -21,7 +27,11 @@ SUB_ID = "sarbaz_premium_monthly"
 # GOOGLE ACCESS TOKEN
 # ==========================================================
 
-def get_access_token():
+def get_access_token() -> str:
+    """
+    Получает OAuth access token для Google Play Developer API
+    из service account JSON, лежащего в ENV.
+    """
     raw = os.getenv("GOOGLE_PLAY_SERVICE_JSON")
     if not raw:
         raise RuntimeError("GOOGLE_PLAY_SERVICE_JSON not set")
@@ -38,7 +48,7 @@ def get_access_token():
 
 
 # ==========================================================
-# VERIFY PURCHASE
+# VERIFY SUBSCRIPTION PURCHASE
 # ==========================================================
 
 @router.post("/verify")
@@ -47,9 +57,20 @@ def verify_purchase(
     user: UserSarbaz = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """
+    Проверяет подписку в Google Play и:
+
+    1) делает UPSERT в app_purchases
+    2) обновляет premium_until у пользователя
+    """
+
     purchase_token = data.get("purchaseToken")
     if not purchase_token:
         raise HTTPException(400, "purchaseToken required")
+
+    # ------------------------------------------------------
+    # 1. VERIFY IN GOOGLE
+    # ------------------------------------------------------
 
     access_token = get_access_token()
 
@@ -69,37 +90,12 @@ def verify_purchase(
     expiry_ms = int(payload["expiryTimeMillis"])
     expiry = datetime.utcfromtimestamp(expiry_ms / 1000)
 
-    order_id = payload.get("orderId")
+    now = datetime.utcnow()
+    is_active = expiry > now
 
-    # ======================================================
-    # 1. UPSERT user_subscriptions
-    # ======================================================
-
-    sub = (
-        db.query(UserSubscription)
-        .filter(UserSubscription.purchase_token == purchase_token)
-        .first()
-    )
-
-    if not sub:
-        sub = UserSubscription(
-            user_id=user.id,
-            product_id=SUB_ID,
-            purchase_token=purchase_token,
-            order_id=order_id,
-            platform="android",
-            purchased_at=datetime.utcnow(),
-            expires_at=expiry,
-            is_active=True,
-        )
-        db.add(sub)
-    else:
-        sub.expires_at = expiry
-        sub.is_active = expiry > datetime.utcnow()
-
-    # ======================================================
-    # 2. GLOBAL PURCHASE HISTORY
-    # ======================================================
+    # ------------------------------------------------------
+    # 2. UPSERT GLOBAL PURCHASE (app_purchases)
+    # ------------------------------------------------------
 
     gp = (
         db.query(AppPurchase)
@@ -114,24 +110,28 @@ def verify_purchase(
             product_id=SUB_ID,
             purchase_token=purchase_token,
             store="google",
-            purchased_at=datetime.utcnow(),
+            purchased_at=now,
             expires_at=expiry,
-            is_active=True,
+            is_active=is_active,
         )
         db.add(gp)
     else:
         gp.expires_at = expiry
-        gp.is_active = expiry > datetime.utcnow()
+        gp.is_active = is_active
 
-    # ======================================================
+    # ------------------------------------------------------
     # 3. UPDATE USER PREMIUM CACHE
-    # ======================================================
+    # ------------------------------------------------------
 
-    user.premium_until = expiry
+    if is_active:
+        user.premium_until = expiry
+    else:
+        # если подписка закончилась — очищаем кэш
+        user.premium_until = None
 
     db.commit()
 
     return {
         "is_premium": user.is_premium,
-        "premium_until": expiry,
+        "premium_until": user.premium_until,
     }
