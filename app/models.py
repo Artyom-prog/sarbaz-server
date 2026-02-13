@@ -167,59 +167,60 @@ class AIUsage(Base):
     def __repr__(self) -> str:
         return f"<AIUsage user_id={self.user_id} day={self.day} count={self.count}>"
     
-    # ==========================================================
-# USER SUBSCRIPTIONS (GOOGLE / APPLE)
+   # ==========================================================
+# GLOBAL APP PURCHASES (OSA / SARBAZ / OTHER)
 # ==========================================================
 
-class UserSubscription(Base):
+class AppPurchase(Base):
     """
-    История подписок пользователя.
+    Универсальная таблица покупок для всех приложений
+    в общей БД.
 
-    Источник истины для premium —
-    именно эта таблица, а не только premium_until.
+    Используется:
+    - OSA
+    - Sarbaz
+    - будущие проекты
+
+    Является ЕДИНСТВЕННЫМ источником истины
+    для premium-статуса.
     """
 
-    __tablename__ = "user_subscriptions"
+    __tablename__ = "app_purchases"
 
     id = Column(Integer, primary_key=True, index=True)
 
-    # связь с пользователем Sarbaz
-    user_id = Column(
-        Integer,
-        ForeignKey("users_sarbaz.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
+    # код приложения
+    # "sarbaz", "osa", "massage", и т.д.
+    app_code = Column(String(50), nullable=False, index=True)
 
-    # идентификатор продукта в Google Play / App Store
+    # пользователь внутри приложения
+    user_id = Column(Integer, nullable=False, index=True)
+
+    # продукт из стора
     product_id = Column(String(120), nullable=False)
 
-    # уникальный purchase token от Google
+    # уникальный purchase token
     purchase_token = Column(String(512), nullable=False, unique=True, index=True)
 
-    # order id из Google
-    order_id = Column(String(255), nullable=True, index=True)
+    # магазин: google / apple
+    store = Column(String(20), nullable=False)
 
-    # платформа: android / ios
-    platform = Column(String(20), nullable=False, default="android")
-
-    # даты подписки
+    # даты покупки
     purchased_at = Column(DateTime, nullable=False)
-    expires_at = Column(DateTime, nullable=False, index=True)
 
-    # активна ли подписка сейчас (кэш-флаг)
+    # дата окончания (None для lifetime)
+    expires_at = Column(DateTime, nullable=True)
+
+    # активна ли покупка
     is_active = Column(Boolean, nullable=False, default=True, index=True)
 
-    # служебные даты
+    # служебная дата
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
-
-    # связь ORM
-    user = relationship("UserSarbaz", backref="subscriptions")
 
     def __repr__(self) -> str:
         return (
-            f"<UserSubscription user_id={self.user_id} "
+            f"<AppPurchase app={self.app_code} "
+            f"user={self.user_id} "
             f"product={self.product_id} "
-            f"expires={self.expires_at} "
             f"active={self.is_active}>"
         )
