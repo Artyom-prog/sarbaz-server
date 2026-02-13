@@ -1,14 +1,15 @@
 from datetime import date
 from sqlalchemy.orm import Session
-from app.models import AIUsage
+from sqlalchemy import select
 
+from app.models import AIUsage
 
 FREE_LIMIT = 5
 
 
 def check_and_increment_usage(db: Session, user):
     """
-    Проверяет лимит и увеличивает счётчик.
+    Проверяет лимит и увеличивает счётчик атомарно.
 
     Возвращает:
         allowed: bool
@@ -22,20 +23,25 @@ def check_and_increment_usage(db: Session, user):
 
     today = date.today()
 
+    # ===== берём запись С БЛОКИРОВКОЙ =====
     usage = (
-        db.query(AIUsage)
-        .filter(AIUsage.user_id == user.id, AIUsage.day == today)
-        .first()
+        db.execute(
+            select(AIUsage)
+            .where(AIUsage.user_id == user.id, AIUsage.day == today)
+            .with_for_update()
+        )
+        .scalar_one_or_none()
     )
 
+    # ===== если записи нет — создаём =====
     if not usage:
         usage = AIUsage(user_id=user.id, day=today, count=0)
         db.add(usage)
-        db.commit()
-        db.refresh(usage)
+        db.flush()  # без commit, просто получаем объект
 
     # ===== лимит достигнут =====
     if usage.count >= FREE_LIMIT:
+        db.commit()
         return False, 0, False
 
     # ===== увеличиваем счётчик =====

@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
+from datetime import datetime
 
 from app.db import get_db
 from app.routes.auth import get_current_user
@@ -19,19 +20,36 @@ def get_profile(
     Профиль текущего пользователя Sarbaz.
     """
 
-    # ===== PREMIUM =====
+    # ======================================================
+    # 1. FAST PREMIUM SYNC (защита от просроченного premium)
+    # ======================================================
+
+    if user.premium_until and user.premium_until <= datetime.utcnow():
+        user.premium_until = None
+        db.commit()
+        db.refresh(user)
+
+    # ======================================================
+    # 2. PREMIUM
+    # ======================================================
+
     premium = PremiumInfo(
         is_premium=user.is_premium,
         premium_until=user.premium_until,
         days_left=user.premium_days_left,
     )
 
-    # ===== AI =====
-    ai_stats_raw = get_ai_stats(db, user)
+    # ======================================================
+    # 3. AI
+    # ======================================================
 
+    ai_stats_raw = get_ai_stats(db, user)
     ai = AIStats(**ai_stats_raw)
 
-    # ===== RESPONSE =====
+    # ======================================================
+    # 4. RESPONSE
+    # ======================================================
+
     return ProfileResponse(
         id=user.id,
         name=user.name,

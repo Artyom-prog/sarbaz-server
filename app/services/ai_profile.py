@@ -11,14 +11,6 @@ def get_ai_stats(db: Session, user: UserSarbaz):
     Возвращает статистику использования AI за сегодня.
     """
 
-    # Премиум → безлимит
-    if user.is_premium:
-        return {
-            "used_today": 0,
-            "limit": -1,
-            "remaining": -1,
-        }
-
     today = date.today()
 
     usage = (
@@ -28,6 +20,15 @@ def get_ai_stats(db: Session, user: UserSarbaz):
     )
 
     used = usage.count if usage else 0
+
+    # Премиум → без лимита, но статистику НЕ теряем
+    if user.is_premium:
+        return {
+            "used_today": used,
+            "limit": -1,
+            "remaining": -1,
+        }
+
     remaining = max(FREE_LIMIT - used, 0)
 
     return {

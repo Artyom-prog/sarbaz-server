@@ -80,7 +80,14 @@ def verify_purchase(
         f"{SUB_ID}/tokens/{purchase_token}"
     )
 
-    r = requests.get(url, headers={"Authorization": f"Bearer {access_token}"})
+    try:
+        r = requests.get(
+            url,
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=10,
+        )
+    except requests.RequestException:
+        raise HTTPException(502, "Google verification request failed")
 
     if r.status_code != 200:
         raise HTTPException(400, f"Google verify failed: {r.text}")
@@ -124,10 +131,23 @@ def verify_purchase(
     # ------------------------------------------------------
 
     if is_active:
-        user.premium_until = expiry
+        # ставим максимальный срок премиума
+        if not user.premium_until or expiry > user.premium_until:
+            user.premium_until = expiry
     else:
-        # если подписка закончилась — очищаем кэш
-        user.premium_until = None
+        # проверяем, есть ли другие активные подписки
+        other_active = (
+            db.query(AppPurchase)
+            .filter(
+                AppPurchase.user_id == user.id,
+                AppPurchase.is_active == True,
+                AppPurchase.expires_at > now,
+            )
+            .first()
+        )
+
+        if not other_active:
+            user.premium_until = None
 
     db.commit()
 
