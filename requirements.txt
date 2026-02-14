@@ -1,15 +1,20 @@
-fastapi
-uvicorn[standard]
-gunicorn
-sqlalchemy
-psycopg2-binary
-python-jose[cryptography]
-passlib[bcrypt]
-pydantic-settings
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+gunicorn>=22.0.0
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.9
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+pydantic-settings>=2.3.0
 firebase-admin==6.5.0
-openai>=1.42.0
-httpx>=0.27,<0.29
-google-auth
-google-auth-httplib2
-google-auth-oauthlib
-requests
+openai>=1.42.0,<2.0.0     # если не хочешь неожиданных breaking changes
+httpx>=0.27.0,<0.29.0
+google-auth>=2.35.0
+google-auth-httplib2>=0.2.0
+google-auth-oauthlib>=1.2.0
+requests>=2.31.0
+
+# Новое / критическое для твоего кода
+python-dateutil>=2.8.2    # для парсинга RFC3339 дат от Google Play API
+
+orjson>=3.10.0            # ускоряет JSON в FastAPI
