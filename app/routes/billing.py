@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 import json
 import requests
@@ -20,7 +20,6 @@ router = APIRouter(prefix="/api/billing", tags=["Billing"])
 # ==========================================================
 
 PACKAGE_NAME = "kz.sarbazinfo5000.app"
-SUB_ID = "sarbaz_premium_monthly"
 
 
 # ==========================================================
@@ -48,7 +47,70 @@ def get_access_token() -> str:
 
 
 # ==========================================================
-# VERIFY SUBSCRIPTION PURCHASE
+# GOOGLE VERIFY (SUBSCRIPTIONS V2)
+# ==========================================================
+
+def verify_google_subscription_v2(purchase_token: str):
+    """
+    Проверяет подписку через новый endpoint subscriptionsv2.
+    Возвращает:
+        is_active: bool
+        expiry: datetime | None
+        product_id: str | None
+        raw: dict
+    """
+
+    access_token = get_access_token()
+
+    url = (
+        "https://androidpublisher.googleapis.com/androidpublisher/v3/"
+        f"applications/{PACKAGE_NAME}/purchases/subscriptionsv2/tokens/{purchase_token}"
+    )
+
+    try:
+        r = requests.get(
+            url,
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=10,
+        )
+    except requests.RequestException:
+        raise HTTPException(502, "Google verification request failed")
+
+    if r.status_code != 200:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "msg": "Google verify failed",
+                "google_status": r.status_code,
+                "google_body": r.text,
+            },
+        )
+
+    payload = r.json()
+
+    # ------------------------------------------------------
+    # lineItems — список активных entitlement’ов
+    # ------------------------------------------------------
+
+    line_items = payload.get("lineItems", [])
+    if not line_items:
+        return False, None, None, payload
+
+    line = line_items[0]
+
+    # expiryTime может быть строкой миллисекунд
+    expiry_ms = int(line.get("expiryTime", "0"))
+    expiry = datetime.fromtimestamp(expiry_ms / 1000, tz=timezone.utc)
+
+    is_active = expiry > datetime.now(tz=timezone.utc)
+
+    product_id = line.get("productId")
+
+    return is_active, expiry, product_id, payload
+
+
+# ==========================================================
+# VERIFY ENDPOINT
 # ==========================================================
 
 @router.post("/verify")
@@ -64,7 +126,7 @@ def verify_purchase(
     2) обновляет premium_until у пользователя
     """
 
-    purchase_token = data.get("purchaseToken")
+    purchase_token = (data.get("purchaseToken") or "").strip()
     if not purchase_token:
         raise HTTPException(400, "purchaseToken required")
 
@@ -72,33 +134,9 @@ def verify_purchase(
     # 1. VERIFY IN GOOGLE
     # ------------------------------------------------------
 
-    access_token = get_access_token()
+    is_active, expiry, product_id, _ = verify_google_subscription_v2(purchase_token)
 
-    url = (
-        "https://androidpublisher.googleapis.com/androidpublisher/v3/"
-        f"applications/{PACKAGE_NAME}/purchases/subscriptions/"
-        f"{SUB_ID}/tokens/{purchase_token}"
-    )
-
-    try:
-        r = requests.get(
-            url,
-            headers={"Authorization": f"Bearer {access_token}"},
-            timeout=10,
-        )
-    except requests.RequestException:
-        raise HTTPException(502, "Google verification request failed")
-
-    if r.status_code != 200:
-        raise HTTPException(400, f"Google verify failed: {r.text}")
-
-    payload = r.json()
-
-    expiry_ms = int(payload["expiryTimeMillis"])
-    expiry = datetime.utcfromtimestamp(expiry_ms / 1000)
-
-    now = datetime.utcnow()
-    is_active = expiry > now
+    now = datetime.now(tz=timezone.utc)
 
     # ------------------------------------------------------
     # 2. UPSERT GLOBAL PURCHASE (app_purchases)
@@ -114,7 +152,7 @@ def verify_purchase(
         gp = AppPurchase(
             app_code="sarbaz",
             user_id=user.id,
-            product_id=SUB_ID,
+            product_id=product_id,
             purchase_token=purchase_token,
             store="google",
             purchased_at=now,
@@ -125,17 +163,16 @@ def verify_purchase(
     else:
         gp.expires_at = expiry
         gp.is_active = is_active
+        gp.product_id = product_id
 
     # ------------------------------------------------------
     # 3. UPDATE USER PREMIUM CACHE
     # ------------------------------------------------------
 
     if is_active:
-        # ставим максимальный срок премиума
         if not user.premium_until or expiry > user.premium_until:
             user.premium_until = expiry
     else:
-        # проверяем, есть ли другие активные подписки
         other_active = (
             db.query(AppPurchase)
             .filter(
@@ -150,8 +187,13 @@ def verify_purchase(
             user.premium_until = None
 
     db.commit()
+    db.refresh(user)
+
+    # ------------------------------------------------------
+    # 4. RESPONSE ДЛЯ КЛИЕНТА
+    # ------------------------------------------------------
 
     return {
-        "is_premium": user.is_premium,
+        "is_premium": bool(user.premium_until and user.premium_until > now),
         "premium_until": user.premium_until,
     }
