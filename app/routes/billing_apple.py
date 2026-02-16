@@ -10,7 +10,6 @@ from typing import Any
 
 import jwt
 from cryptography import x509
-from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -28,17 +27,14 @@ log = logging.getLogger("billing.apple")
 # =========================
 BUNDLE_ID_EXPECTED = "kz.sarbazinfo5000.app"
 
-# ⚠️ Для StoreKit2 verifyReceipt обычно НЕ нужен.
-# Но можешь оставить, если параллельно поддерживаешь legacy-чеки.
-APPLE_SHARED_SECRET = os.getenv("APPLE_SHARED_SECRET")  # optional for SK2 path
-
-# Корневой сертификат Apple (PEM) — положи в репо
-APPLE_ROOT_CERT_PATH = Path(__file__).resolve().parent.parent / "certs" / "AppleRootCA-G3.pem"
+APPLE_ROOT_CERT_PATH = (
+    Path(__file__).resolve().parent.parent / "certs" / "AppleRootCA-G3.pem"
+)
 
 
 class AppleVerifyRequest(BaseModel):
     productId: str
-    receiptData: str  # StoreKit2: JWS (jwsRepresentation)
+    receiptData: str  # StoreKit2 JWS
     transactionId: str | None = None
 
 
@@ -49,46 +45,58 @@ def _load_apple_root_cert() -> x509.Certificate:
     if not APPLE_ROOT_CERT_PATH.exists():
         raise RuntimeError(f"Apple root cert not found: {APPLE_ROOT_CERT_PATH}")
 
-    pem = APPLE_ROOT_CERT_PATH.read_bytes()
-    return x509.load_pem_x509_certificate(pem)
+    return x509.load_pem_x509_certificate(APPLE_ROOT_CERT_PATH.read_bytes())
 
 
 def _b64_to_der_cert(b64: str) -> x509.Certificate:
-    der = base64.b64decode(b64)
-    return x509.load_der_x509_certificate(der)
+    return x509.load_der_x509_certificate(base64.b64decode(b64))
 
 
 def _verify_cert_signed_by(child: x509.Certificate, issuer: x509.Certificate) -> None:
     issuer_pub = issuer.public_key()
-    sig = child.signature
-    tbs = child.tbs_certificate_bytes
-    algo = child.signature_hash_algorithm
 
     if isinstance(issuer_pub, rsa.RSAPublicKey):
-        issuer_pub.verify(sig, tbs, padding.PKCS1v15(), algo)
+        issuer_pub.verify(
+            child.signature,
+            child.tbs_certificate_bytes,
+            padding.PKCS1v15(),
+            child.signature_hash_algorithm,
+        )
         return
 
     if isinstance(issuer_pub, ec.EllipticCurvePublicKey):
-        issuer_pub.verify(sig, tbs, ec.ECDSA(algo))
+        issuer_pub.verify(
+            child.signature,
+            child.tbs_certificate_bytes,
+            ec.ECDSA(child.signature_hash_algorithm),
+        )
         return
 
     raise RuntimeError(f"Unsupported public key type: {type(issuer_pub)}")
 
 
+def _verify_cert_validity(*certs: x509.Certificate) -> None:
+    now = datetime.now(timezone.utc)
+
+    for cert in certs:
+        if cert.not_valid_before.replace(tzinfo=timezone.utc) > now:
+            raise ValueError("Certificate not yet valid")
+        if cert.not_valid_after.replace(tzinfo=timezone.utc) < now:
+            raise ValueError("Certificate expired")
+
+
 def _verify_x5c_chain(x5c: list[str], apple_root: x509.Certificate) -> x509.Certificate:
     """
-    Apple JWS содержит x5c: [leaf, intermediate, ...]
     Проверяем:
-      leaf подписан intermediate
-      intermediate подписан root (наш Apple Root CA)
-    Возвращаем leaf cert (его public key используется для проверки подписи JWS).
+    leaf -> intermediate -> Apple Root
     """
     if len(x5c) < 2:
-        raise ValueError("x5c chain is too short")
+        raise ValueError("x5c chain too short")
 
     leaf = _b64_to_der_cert(x5c[0])
     intermediate = _b64_to_der_cert(x5c[1])
 
+    _verify_cert_validity(leaf, intermediate, apple_root)
     _verify_cert_signed_by(leaf, intermediate)
     _verify_cert_signed_by(intermediate, apple_root)
 
@@ -96,18 +104,11 @@ def _verify_x5c_chain(x5c: list[str], apple_root: x509.Certificate) -> x509.Cert
 
 
 def _looks_like_jws(s: str) -> bool:
-    # JWS = header.payload.signature → 3 части с точками
     parts = s.split(".")
     return len(parts) == 3 and all(p.strip() for p in parts)
 
 
 def _decode_and_verify_storekit2_jws(jws: str) -> dict[str, Any]:
-    """
-    1) достаём header без проверки
-    2) проверяем цепочку x5c до Apple Root
-    3) проверяем подпись JWS leaf public key
-    4) возвращаем payload dict
-    """
     try:
         header = jwt.get_unverified_header(jws)
     except Exception as e:
@@ -116,10 +117,11 @@ def _decode_and_verify_storekit2_jws(jws: str) -> dict[str, Any]:
     x5c = header.get("x5c")
     alg = header.get("alg")
 
-    if not x5c or not isinstance(x5c, list):
-        raise ValueError("Missing x5c in JWS header")
+    if not isinstance(x5c, list) or not x5c:
+        raise ValueError("Missing x5c in header")
+
     if not alg:
-        raise ValueError("Missing alg in JWS header")
+        raise ValueError("Missing alg in header")
 
     apple_root = _load_apple_root_cert()
     leaf_cert = _verify_x5c_chain(x5c, apple_root)
@@ -131,25 +133,24 @@ def _decode_and_verify_storekit2_jws(jws: str) -> dict[str, Any]:
             key=leaf_pub,
             algorithms=[alg],
             options={
-                "verify_aud": False,  # StoreKit2 transaction JWS обычно без aud
+                "verify_aud": False,
+                "verify_exp": False,
             },
         )
     except Exception as e:
         raise ValueError(f"JWS signature verify failed: {e}")
 
     if not isinstance(payload, dict):
-        raise ValueError("JWS payload is not an object")
+        raise ValueError("Payload is not dict")
 
     return payload
 
 
-def _extract_expiry_from_sk2_payload(payload: dict[str, Any]) -> datetime | None:
-    """
-    Для подписок StoreKit2 transaction payload содержит expiresDate (ms unix).
-    """
+def _extract_expiry(payload: dict[str, Any]) -> datetime | None:
     expires_ms = payload.get("expiresDate")
     if expires_ms is None:
         return None
+
     try:
         ms = int(expires_ms)
     except Exception:
@@ -162,7 +163,7 @@ def _extract_expiry_from_sk2_payload(payload: dict[str, Any]) -> datetime | None
 
 
 # =========================================================
-# ENDPOINT (StoreKit2)
+# ENDPOINT
 # =========================================================
 @router.post("/apple/verify")
 def verify_apple(
@@ -177,40 +178,31 @@ def verify_apple(
         raise HTTPException(status_code=400, detail="receiptData/productId required")
 
     if not _looks_like_jws(jws):
-        # Если хочешь — можно тут оставить legacy verifyReceipt,
-        # но ты просил StoreKit2, поэтому явно фейлим.
-        log.warning("Non-JWS receiptData received (expected StoreKit2 JWS)")
+        log.warning("Non-JWS receipt received")
         return {"is_premium": False, "premium_until": None}
 
     try:
         payload = _decode_and_verify_storekit2_jws(jws)
     except Exception as e:
-        log.warning("Apple SK2 JWS verify failed: %s", str(e))
+        log.warning("Apple SK2 verify failed: %s", str(e))
         return {"is_premium": False, "premium_until": None}
 
     # =============================
     # SECURITY CHECKS
     # =============================
-    bundle_id = (payload.get("bundleId") or "").strip()
-    if bundle_id != BUNDLE_ID_EXPECTED:
-        log.error("Bundle ID mismatch (SK2)", extra={"bundleId": bundle_id})
+    if payload.get("bundleId") != BUNDLE_ID_EXPECTED:
+        log.error("Bundle mismatch: %s", payload.get("bundleId"))
         return {"is_premium": False, "premium_until": None}
 
-    pid = (payload.get("productId") or "").strip()
-    if pid != product_id:
-        # Нормально строго сравнивать: клиент прислал productId, payload тоже его содержит
-        log.warning("Product ID mismatch (SK2)", extra={"req": product_id, "payload": pid})
+    if payload.get("productId") != product_id:
+        log.warning("Product mismatch")
         return {"is_premium": False, "premium_until": None}
-
-    # (опционально) можно валидировать transactionId
-    # tid_payload = (payload.get("transactionId") or "").strip()
 
     # =============================
     # EXPIRY
     # =============================
-    premium_until = _extract_expiry_from_sk2_payload(payload)
+    premium_until = _extract_expiry(payload)
     if premium_until is None:
-        # Не подписка или Apple не дал expiresDate
         return {"is_premium": False, "premium_until": None}
 
     now = datetime.now(timezone.utc)
@@ -219,9 +211,8 @@ def verify_apple(
     # =============================
     # UPDATE USER
     # =============================
-    # user.premium_until у тебя может быть naive/aware — приводим аккуратно
     current = user.premium_until
-    if current is not None and current.tzinfo is None:
+    if current and current.tzinfo is None:
         current = current.replace(tzinfo=timezone.utc)
 
     if current is None or premium_until > current:
