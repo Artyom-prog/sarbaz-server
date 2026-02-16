@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import base64
 import logging
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -16,7 +15,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import UserSarbaz
+from app.models import UserSarbaz, AppPurchase
 from app.routes.auth import get_current_user
 
 router = APIRouter(prefix="/api/billing", tags=["Billing"])
@@ -35,7 +34,7 @@ APPLE_ROOT_CERT_PATH = (
 class AppleVerifyRequest(BaseModel):
     productId: str
     receiptData: str  # StoreKit2 JWS
-    transactionId: str | None = None
+    transactionId: str | None = None  # можно прислать с клиента
 
 
 # =========================================================
@@ -79,9 +78,17 @@ def _verify_cert_validity(*certs: x509.Certificate) -> None:
     now = datetime.now(timezone.utc)
 
     for cert in certs:
-        if cert.not_valid_before.replace(tzinfo=timezone.utc) > now:
+        # cryptography может давать naive datetime — приводим к utc для сравнения
+        not_before = cert.not_valid_before
+        not_after = cert.not_valid_after
+        if not_before.tzinfo is None:
+            not_before = not_before.replace(tzinfo=timezone.utc)
+        if not_after.tzinfo is None:
+            not_after = not_after.replace(tzinfo=timezone.utc)
+
+        if not_before > now:
             raise ValueError("Certificate not yet valid")
-        if cert.not_valid_after.replace(tzinfo=timezone.utc) < now:
+        if not_after < now:
             raise ValueError("Certificate expired")
 
 
@@ -134,7 +141,7 @@ def _decode_and_verify_storekit2_jws(jws: str) -> dict[str, Any]:
             algorithms=[alg],
             options={
                 "verify_aud": False,
-                "verify_exp": False,
+                "verify_exp": False,  # expiresDate — это про подписку, не JWT exp
             },
         )
     except Exception as e:
@@ -147,6 +154,9 @@ def _decode_and_verify_storekit2_jws(jws: str) -> dict[str, Any]:
 
 
 def _extract_expiry(payload: dict[str, Any]) -> datetime | None:
+    """
+    StoreKit2 transaction payload (JWS) обычно содержит expiresDate в миллисекундах.
+    """
     expires_ms = payload.get("expiresDate")
     if expires_ms is None:
         return None
@@ -160,6 +170,30 @@ def _extract_expiry(payload: dict[str, Any]) -> datetime | None:
         return None
 
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
+
+
+def _extract_purchase_token(req: AppleVerifyRequest, payload: dict[str, Any]) -> str | None:
+    """
+    Для подписок лучше хранить originalTransactionId (один на всю цепочку renewals).
+    Если его нет — используем transactionId.
+    """
+    candidate = (
+        req.transactionId
+        or payload.get("originalTransactionId")
+        or payload.get("transactionId")
+    )
+    if not candidate:
+        return None
+    candidate = str(candidate).strip()
+    return candidate or None
+
+
+def _as_utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 # =========================================================
@@ -195,7 +229,7 @@ def verify_apple(
         return {"is_premium": False, "premium_until": None}
 
     if payload.get("productId") != product_id:
-        log.warning("Product mismatch")
+        log.warning("Product mismatch payload=%s req=%s", payload.get("productId"), product_id)
         return {"is_premium": False, "premium_until": None}
 
     # =============================
@@ -206,21 +240,63 @@ def verify_apple(
         return {"is_premium": False, "premium_until": None}
 
     now = datetime.now(timezone.utc)
-    is_premium = premium_until > now
+    is_active = premium_until > now
 
     # =============================
-    # UPDATE USER
+    # UPSERT В AppPurchase
     # =============================
-    current = user.premium_until
-    if current and current.tzinfo is None:
-        current = current.replace(tzinfo=timezone.utc)
+    purchase_token = _extract_purchase_token(req, payload)
+    if not purchase_token:
+        log.error("Apple transactionId/originalTransactionId missing")
+        return {"is_premium": False, "premium_until": None}
 
-    if current is None or premium_until > current:
-        user.premium_until = premium_until
-        db.add(user)
-        db.commit()
+    ap = (
+        db.query(AppPurchase)
+        .filter(AppPurchase.purchase_token == purchase_token)
+        .first()
+    )
+
+    if not ap:
+        ap = AppPurchase(
+            app_code="sarbaz",
+            user_id=user.id,
+            product_id=product_id,
+            purchase_token=purchase_token,
+            store="apple",
+            purchased_at=now,
+            expires_at=premium_until,
+            is_active=is_active,
+        )
+        db.add(ap)
+    else:
+        ap.product_id = product_id
+        ap.expires_at = premium_until
+        ap.is_active = is_active
+
+    # =============================
+    # ПЕРЕСЧЁТ premium_until У USER
+    # (единая логика как в Google)
+    # =============================
+    other_active = (
+        db.query(AppPurchase)
+        .filter(
+            AppPurchase.user_id == user.id,
+            AppPurchase.is_active == True,
+            AppPurchase.expires_at > now,
+        )
+        .order_by(AppPurchase.expires_at.desc())
+        .first()
+    )
+
+    user.premium_until = _as_utc(other_active.expires_at) if other_active else None
+
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    is_premium = bool(user.premium_until and _as_utc(user.premium_until) > now)
 
     return {
         "is_premium": is_premium,
-        "premium_until": premium_until.isoformat(),
+        "premium_until": user.premium_until.isoformat() if user.premium_until else None,
     }
