@@ -13,6 +13,7 @@ google-auth>=2.35.0
 google-auth-httplib2>=0.2.0
 google-auth-oauthlib>=1.2.0
 requests>=2.31.0
+cryptography>=3.4.8           # для безопасного хранения секретов и JWT
 
 # Новое / критическое для твоего кода
 python-dateutil>=2.8.2    # для парсинга RFC3339 дат от Google Play API
