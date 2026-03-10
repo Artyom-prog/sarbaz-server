@@ -7,10 +7,10 @@
     "store_url": "https://play.google.com/store/apps/details?id=kz.sarbazinfo5000.app"
   },
   "ios": {
-    "latest_version": "1.0.3",
-    "latest_build": 45,
-    "min_supported_version": "1.0.3",
-    "min_supported_build": 45,
+    "latest_version": "1.0.2",
+    "latest_build": 44,
+    "min_supported_version": "1.0.2",
+    "min_supported_build": 44,
     "store_url": "https://apps.apple.com/us/app/sarbazinfo/id6758907856"
   },
   "rustore": {
