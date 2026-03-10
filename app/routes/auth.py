@@ -44,7 +44,7 @@ JWT_SECRET = os.getenv("JWT_SECRET")
 if not JWT_SECRET:
     raise RuntimeError("JWT_SECRET is not set")
 
-JWT_EXPIRE_MINUTES = 30
+JWT_EXPIRE_MINUTES = 1
 REFRESH_EXPIRE_DAYS = 30
 
 
